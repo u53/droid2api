@@ -23,31 +23,12 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Extract system message(s) and transform other messages
-  let systemContent = [];
-  
+  // Skip client system messages and transform other messages
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
-      // Handle system messages separately
+      // Always ignore client-provided system messages for Anthropic forwarding
       if (msg.role === 'system') {
-        if (typeof msg.content === 'string') {
-          systemContent.push({
-            type: 'text',
-            text: msg.content
-          });
-        } else if (Array.isArray(msg.content)) {
-          for (const part of msg.content) {
-            if (part.type === 'text') {
-              systemContent.push({
-                type: 'text',
-                text: part.text
-              });
-            } else {
-              systemContent.push(part);
-            }
-          }
-        }
-        continue; // Skip adding system messages to messages array
+        continue;
       }
 
       const anthropicMsg = {
@@ -82,19 +63,13 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // Add system parameter with system prompt prepended
+  // Always use the configured system prompt for Anthropic forwarding
   const systemPrompt = getSystemPrompt();
-  if (systemPrompt || systemContent.length > 0) {
-    anthropicRequest.system = [];
-    // Prepend system prompt as first element if it exists
-    if (systemPrompt) {
-      anthropicRequest.system.push({
-        type: 'text',
-        text: systemPrompt
-      });
-    }
-    // Add user-provided system content
-    anthropicRequest.system.push(...systemContent);
+  if (systemPrompt) {
+    anthropicRequest.system = [{
+      type: 'text',
+      text: systemPrompt
+    }];
   }
 
   // Transform tools if present
@@ -155,6 +130,13 @@ export function transformToAnthropic(openaiRequest) {
   return anthropicRequest;
 }
 
+function isAllowedAnthropicBeta(betaValue) {
+  return betaValue !== 'claude-code-20250219'
+    && !betaValue.startsWith('context-1m-')
+    && !betaValue.startsWith('adaptive-thinking-')
+    && !betaValue.startsWith('effort-');
+}
+
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
@@ -165,7 +147,6 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
     'content-type': 'application/json',
     'anthropic-version': clientHeaders['anthropic-version'] || '2023-06-01',
     'authorization': authHeader || '',
-    'x-api-key': 'placeholder',
     'x-api-provider': provider,
     'x-factory-client': 'cli',
     'x-session-id': sessionId,
@@ -182,7 +163,11 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
   // Add existing beta values from client headers
   if (clientHeaders['anthropic-beta']) {
     const existingBeta = clientHeaders['anthropic-beta'];
-    betaValues = existingBeta.split(',').map(v => v.trim());
+    betaValues = existingBeta
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean)
+      .filter(isAllowedAnthropicBeta);
   }
   
   // Handle thinking beta based on reasoning configuration

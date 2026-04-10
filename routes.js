@@ -498,22 +498,15 @@ async function handleDirectMessages(req, res) {
     const isStreaming = anthropicRequest.stream === true;
     const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId, provider);
 
-    // 注入系统提示到 system 字段，并更新重定向后的模型ID
+    // 强制使用配置中的系统提示，并更新重定向后的模型ID
     const systemPrompt = getSystemPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
     if (systemPrompt) {
-      if (modifiedRequest.system && Array.isArray(modifiedRequest.system)) {
-        // 如果已有 system 数组，则在最前面插入系统提示
-        modifiedRequest.system = [
-          { type: 'text', text: systemPrompt },
-          ...modifiedRequest.system
-        ];
-      } else {
-        // 否则创建新的 system 数组
-        modifiedRequest.system = [
-          { type: 'text', text: systemPrompt }
-        ];
-      }
+      modifiedRequest.system = [
+        { type: 'text', text: systemPrompt }
+      ];
+    } else {
+      delete modifiedRequest.system;
     }
 
     // 处理thinking字段
@@ -653,8 +646,16 @@ async function handleCountTokens(req, res) {
     // 构建 count_tokens 端点 URL
     const countTokensUrl = endpoint.base_url.replace('/v1/messages', '/v1/messages/count_tokens');
 
-    // 更新请求体中的模型ID为重定向后的ID
+    // 强制使用配置中的系统提示，并更新请求体中的模型ID
+    const systemPrompt = getSystemPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
+    if (systemPrompt) {
+      modifiedRequest.system = [
+        { type: 'text', text: systemPrompt }
+      ];
+    } else {
+      delete modifiedRequest.system;
+    }
 
     logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
     logRequest('POST', countTokensUrl, headers, modifiedRequest);
