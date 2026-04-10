@@ -4,6 +4,8 @@ import { logInfo, logError } from './logger.js';
 import router from './routes.js';
 import { initializeAuth } from './auth.js';
 import { initializeUserAgentUpdater } from './user-agent-updater.js';
+import { initAccountManager, startBackgroundTasks, stopBackgroundTasks } from './account-manager.js';
+import adminRouter from './admin-routes.js';
 
 const app = express();
 
@@ -21,6 +23,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(adminRouter);
 app.use(router);
 
 app.get('/', (req, res) => {
@@ -114,13 +117,19 @@ app.use((err, req, res, next) => {
     loadConfig();
     logInfo('Configuration loaded successfully');
     logInfo(`Dev mode: ${isDevMode()}`);
-    
+
     // Initialize User-Agent version updater
     initializeUserAgentUpdater();
-    
+
+    // Initialize account manager (multi-account system)
+    initAccountManager();
+
     // Initialize auth system (load and setup API key if needed)
     // This won't throw error if no auth config is found - will use client auth
     await initializeAuth();
+
+    // Start background tasks (token refresh & balance check)
+    startBackgroundTasks();
     
     const PORT = getPort();
   logInfo(`Starting server on port ${PORT}...`);
@@ -135,6 +144,7 @@ app.use((err, req, res, next) => {
       logInfo('  POST /v1/messages');
       logInfo('  POST /v1/messages/count_tokens');
       logInfo('  POST /v1/generate');
+      logInfo('  GET  /admin (Admin Console)');
     })
     .on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
@@ -154,6 +164,18 @@ app.use((err, req, res, next) => {
         process.exit(1);
       }
     });
+    // Graceful shutdown
+    const shutdown = () => {
+      logInfo('Shutting down...');
+      stopBackgroundTasks();
+      server.close(() => {
+        logInfo('Server closed');
+        process.exit(0);
+      });
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
   } catch (error) {
     logError('Failed to start server', error);
     process.exit(1);

@@ -140,6 +140,8 @@ async function handleChatCompletions(req, res) {
       return res.status(404).json({ error: `Model ${modelId} not found` });
     }
 
+    logInfo(`Model: ${modelId}`);
+
     const endpoint = getEndpointByType(model.type);
     if (!endpoint) {
       return res.status(500).json({ error: `Endpoint type ${model.type} not found` });
@@ -314,6 +316,8 @@ async function handleDirectResponses(req, res) {
       return res.status(404).json({ error: `Model ${modelId} not found` });
     }
 
+    logInfo(`Model: ${modelId}`);
+
     // 只允许 openai 类型端点
     if (model.type !== 'openai') {
       return res.status(400).json({ 
@@ -458,6 +462,8 @@ async function handleDirectMessages(req, res) {
     if (!model) {
       return res.status(404).json({ error: `Model ${modelId} not found` });
     }
+
+    logInfo(`Model: ${modelId}`);
 
     // 只允许 anthropic 类型端点
     if (model.type !== 'anthropic') {
@@ -608,6 +614,8 @@ async function handleCountTokens(req, res) {
       return res.status(404).json({ error: `Model ${modelId} not found` });
     }
 
+    logInfo(`Model: ${modelId}`);
+
     // 只允许 anthropic 类型端点
     if (model.type !== 'anthropic') {
       return res.status(400).json({
@@ -713,6 +721,8 @@ async function handleDirectGenerate(req, res) {
     if (!model) {
       return res.status(404).json({ error: `Model ${modelId} not found` });
     }
+
+    logInfo(`Model: ${modelId}`);
 
     // 只允许 google 类型端点
     if (model.type !== 'google') {

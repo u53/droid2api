@@ -4,6 +4,7 @@ import os from 'os';
 import fetch from 'node-fetch';
 import { logDebug, logError, logInfo } from './logger.js';
 import { getNextProxyAgent } from './proxy-manager.js';
+import { getNextApiKey as getNextManagedApiKey, hasAccounts } from './account-manager.js';
 
 // State management for API key and refresh
 let currentApiKey = null;
@@ -238,6 +239,12 @@ function shouldRefresh() {
  */
 export async function initializeAuth() {
   try {
+    if (hasAccounts()) {
+      logInfo('Managed accounts detected, skipping legacy auth initialization');
+      logInfo('Auth system initialized successfully');
+      return;
+    }
+
     const authConfig = loadAuthConfig();
     
     if (authConfig.type === 'factory_key') {
@@ -267,6 +274,11 @@ export async function initializeAuth() {
  * @param {string} clientAuthorization - Authorization header from client request (optional)
  */
 export async function getApiKey(clientAuthorization = null) {
+  // Priority 0: Managed accounts (multi-account scheduler)
+  if (hasAccounts()) {
+    return await getNextManagedApiKey();
+  }
+
   // Priority 1: FACTORY_API_KEY environment variable
   if (authSource === 'factory_key' && factoryApiKey) {
     return `Bearer ${factoryApiKey}`;
