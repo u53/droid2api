@@ -153,7 +153,7 @@
       "provider": "fireworks"
     }
   ],
-  "dev_mode": false,
+  "dev_mode": true,
   "user_agent": "factory-cli/0.85.0",
   "system_prompt": "You are Droid, an AI software engineering agent built by Factory.\n\n"
 }
