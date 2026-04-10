@@ -16,6 +16,10 @@ let accounts = [];
 let dataVersion = 1;
 let backgroundTimers = [];
 
+// Cooldown: Map<accountId, { until: timestamp, reason: string, statusCode: number }>
+const cooldownMap = new Map();
+const COOLDOWN_MS = 30 * 1000; // 30 seconds
+
 // ────────────────────────────────────────
 // Persistence
 // ────────────────────────────────────────
@@ -67,18 +71,64 @@ export function hasAccounts() {
  * Get all accounts (sanitized for API responses)
  */
 export function getAllAccounts() {
-  return accounts.map(a => ({
-    id: a.id,
-    type: a.type || 'auth_json',
-    email: a.email || '',
-    label: a.label || '',
-    status: a.status,
-    error_message: a.error_message,
-    cached_balance: a.cached_balance,
-    created_at: a.created_at,
-    last_refresh: a.last_refresh,
-    exp: a.exp
-  }));
+  const now = Date.now();
+  return accounts.map(a => {
+    const cd = cooldownMap.get(a.id);
+    const cooldown = (cd && cd.until > now) ? { until: cd.until, reason: cd.reason } : null;
+    return {
+      id: a.id,
+      type: a.type || 'auth_json',
+      email: a.email || '',
+      label: a.label || '',
+      status: a.status,
+      error_message: a.error_message,
+      cached_balance: a.cached_balance,
+      created_at: a.created_at,
+      last_refresh: a.last_refresh,
+      exp: a.exp,
+      cooldown
+    };
+  });
+}
+
+/**
+ * Decrypt auth.v2 format: AES-256-GCM
+ * @param {string} fileContent - content of auth.v2.file (IV:AuthTag:Ciphertext, all Base64)
+ * @param {string} keyContent  - content of auth.v2.key (Base64 encoded 256-bit key)
+ * @returns {object} decrypted JSON { access_token, refresh_token }
+ */
+export function decryptAuthV2(fileContent, keyContent) {
+  try {
+    const key = Buffer.from(keyContent.trim(), 'base64');
+    if (key.length !== 32) {
+      throw new Error(`密钥长度无效: 期望32字节, 实际${key.length}字节`);
+    }
+
+    const parts = fileContent.trim().split(':');
+    if (parts.length !== 3) {
+      throw new Error('auth.v2.file 格式无效，需要 IV:AuthTag:密文 三段');
+    }
+
+    const iv = Buffer.from(parts[0], 'base64');
+    const authTag = Buffer.from(parts[1], 'base64');
+    const encrypted = Buffer.from(parts[2], 'base64');
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encrypted, null, 'utf-8');
+    decrypted += decipher.final('utf-8');
+
+    const data = JSON.parse(decrypted);
+    if (!data.refresh_token) {
+      throw new Error('解密后的数据缺少 refresh_token 字段');
+    }
+    return data;
+  } catch (error) {
+    if (error.message.includes('Unsupported state') || error.code === 'ERR_OSSL_BAD_DECRYPT') {
+      throw new Error('解密失败：密钥与加密文件不匹配');
+    }
+    throw error;
+  }
 }
 
 /**
@@ -448,37 +498,101 @@ export async function checkAllBalances() {
 }
 
 // ────────────────────────────────────────
+// Cooldown / Failure Reporting
+// ────────────────────────────────────────
+
+/**
+ * Check if an account is in cooldown
+ */
+function isAccountCoolingDown(accountId) {
+  const cd = cooldownMap.get(accountId);
+  if (!cd) return false;
+  if (Date.now() >= cd.until) {
+    cooldownMap.delete(accountId);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Report that a request using this bearer token returned a retryable error.
+ * Puts the account in 30s cooldown so it's skipped for a while.
+ * @param {string} bearerToken - "Bearer xxx"
+ * @param {number} statusCode - HTTP status (401/402/403/429)
+ * @param {string} reason - error description
+ */
+export function reportAccountFailure(bearerToken, statusCode, reason) {
+  if (!bearerToken) return;
+  const token = bearerToken.replace(/^Bearer\s+/i, '');
+  const account = accounts.find(a => a.access_token === token);
+  if (!account) return;
+
+  const reasonMap = {
+    401: '认证失败 (401)',
+    402: '额度不足 (402)',
+    403: '权限不足 (403)',
+    429: '请求频率过高 (429)'
+  };
+
+  const displayReason = reasonMap[statusCode] || `HTTP ${statusCode}`;
+  const fullReason = `${displayReason}: ${(reason || '').substring(0, 200)}`;
+
+  cooldownMap.set(account.id, {
+    until: Date.now() + COOLDOWN_MS,
+    reason: fullReason,
+    statusCode
+  });
+
+  logInfo(`[Cooldown] Account ${account.id} (${account.email || account.label || 'unknown'}) paused 30s: ${displayReason}`);
+}
+
+// ────────────────────────────────────────
 // Scheduling Algorithm
 // ────────────────────────────────────────
 
 /**
  * Get next API key using smart scheduling
- * Priority: lowest usage ratio among active, non-exhausted accounts
+ * @param {string[]} excludeTokens - Bearer tokens to exclude (already tried in this request)
+ * Priority: lowest usage ratio among active, non-cooled-down accounts
  */
-export async function getNextApiKey() {
-  // 1. Filter active accounts
-  const active = accounts.filter(a => a.status === 'active');
+export async function getNextApiKey(excludeTokens = []) {
+  // Normalize exclude list
+  const excludeSet = new Set(excludeTokens.map(t => t.replace(/^Bearer\s+/i, '')));
+
+  // 1. Filter active accounts, skip cooled-down and excluded
+  const active = accounts.filter(a => {
+    if (a.status !== 'active') return false;
+    if (isAccountCoolingDown(a.id)) return false;
+    if (excludeSet.has(a.access_token)) return false;
+    return true;
+  });
+
   if (active.length === 0) {
-    throw new Error('No active managed accounts available');
+    // Check if some are just in cooldown
+    const coolingDown = accounts.filter(a => a.status === 'active' && isAccountCoolingDown(a.id));
+    if (coolingDown.length > 0) {
+      throw new Error(`所有可用账号均在冷却中 (${coolingDown.length} 个)，请稍后重试`);
+    }
+    throw new Error('没有可用的活跃账号');
   }
 
-  // 2. Exclude exhausted accounts (usedRatio >= 0.95)
+  // 2. Exclude exhausted (usedRatio >= 0.95)
   const available = active.filter(a => {
-    if (!a.cached_balance) return true; // no balance info yet, assume OK
+    if (!a.cached_balance) return true;
     return a.cached_balance.usedRatio < 0.95;
   });
 
   if (available.length === 0) {
-    throw new Error('All managed accounts have exhausted their quota (>=95% used)');
+    throw new Error('所有活跃账号额度均已耗尽 (>=95%)');
   }
 
-  // 3. Exclude accounts with no access token and no refresh token
+  // 3. Must have a token or refresh token
   const usable = available.filter(a => a.access_token || a.refresh_token);
   if (usable.length === 0) {
-    throw new Error('No usable managed accounts (missing tokens)');
+    throw new Error('没有可用的账号 (缺少 token)');
   }
 
-  // 4. Sort by usage ratio ascending (lowest first)
+  // 4. Sort by usage ratio ascending
   usable.sort((a, b) => {
     const ratioA = a.cached_balance?.usedRatio ?? 0;
     const ratioB = b.cached_balance?.usedRatio ?? 0;
@@ -488,17 +602,13 @@ export async function getNextApiKey() {
   // 5. Try accounts in order
   for (const account of usable) {
     try {
-      // API Key accounts: always usable as long as they have a token
       if (account.type === 'apikey') {
-        if (!account.access_token) {
-          logDebug(`Skipping apikey account ${account.id}: empty key`);
-          continue;
-        }
+        if (!account.access_token) continue;
         logDebug(`Scheduled apikey account: ${account.id} (${account.label || 'no label'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
         return `Bearer ${account.access_token}`;
       }
 
-      // auth_json accounts: check if token is expired or about to expire (< 30 min)
+      // auth_json: check expiry
       const now = Date.now();
       const tokenExpired = account.exp && account.exp < now + 30 * 60 * 1000;
       const noToken = !account.access_token;
@@ -508,7 +618,6 @@ export async function getNextApiKey() {
           logInfo(`Token expired/missing for ${account.id}, refreshing...`);
           await refreshAccountToken(account);
         } else {
-          logDebug(`Skipping ${account.id}: no token and no refresh token`);
           continue;
         }
       }
@@ -521,7 +630,7 @@ export async function getNextApiKey() {
     }
   }
 
-  throw new Error('All managed accounts failed to provide a valid API key');
+  throw new Error('所有账号均无法提供有效的 API Key');
 }
 
 // ────────────────────────────────────────

@@ -4,7 +4,7 @@ import os from 'os';
 import fetch from 'node-fetch';
 import { logDebug, logError, logInfo } from './logger.js';
 import { getNextProxyAgent } from './proxy-manager.js';
-import { getNextApiKey as getNextManagedApiKey, hasAccounts } from './account-manager.js';
+import { getNextApiKey as getNextManagedApiKey, hasAccounts, reportAccountFailure } from './account-manager.js';
 
 // State management for API key and refresh
 let currentApiKey = null;
@@ -272,21 +272,21 @@ export async function initializeAuth() {
 /**
  * Get API key based on configured authorization method
  * @param {string} clientAuthorization - Authorization header from client request (optional)
+ * @param {string[]} excludeTokens - Tokens to exclude (for retry, already tried)
  */
-export async function getApiKey(clientAuthorization = null) {
+export async function getApiKey(clientAuthorization = null, excludeTokens = []) {
   // Priority 0: Managed accounts (multi-account scheduler)
   if (hasAccounts()) {
-    return await getNextManagedApiKey();
+    return await getNextManagedApiKey(excludeTokens);
   }
 
   // Priority 1: FACTORY_API_KEY environment variable
   if (authSource === 'factory_key' && factoryApiKey) {
     return `Bearer ${factoryApiKey}`;
   }
-  
+
   // Priority 2: Refresh token mechanism
   if (authSource === 'env' || authSource === 'file') {
-    // Check if we need to refresh
     if (shouldRefresh()) {
       logInfo('API key needs refresh (6+ hours old)');
       await refreshApiKey();
@@ -298,13 +298,21 @@ export async function getApiKey(clientAuthorization = null) {
 
     return `Bearer ${currentApiKey}`;
   }
-  
+
   // Priority 3: Client authorization header
   if (clientAuthorization) {
     logDebug('Using client authorization header');
     return clientAuthorization;
   }
-  
-  // No authorization available
+
   throw new Error('No authorization available. Please configure FACTORY_API_KEY, refresh token, or provide client authorization.');
+}
+
+/**
+ * Report API key failure (delegates to account-manager for cooldown)
+ */
+export function reportApiKeyFailure(bearerToken, statusCode, reason) {
+  if (hasAccounts()) {
+    reportAccountFailure(bearerToken, statusCode, reason);
+  }
 }

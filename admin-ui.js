@@ -252,6 +252,7 @@ export function getDashboardPage() {
     .badge-error { background: rgba(239,68,68,0.15); color: #ef4444; }
     .badge-exhausted { background: rgba(249,115,22,0.15); color: #f97316; }
     .badge-checking { background: rgba(99,102,241,0.15); color: #818cf8; }
+    .badge-cooldown { background: rgba(234,179,8,0.15); color: #eab308; font-size: 11px; }
     .badge-disabled { background: rgba(113,113,122,0.15); color: #71717a; }
 
     /* Progress bar */
@@ -338,6 +339,31 @@ export function getDashboardPage() {
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
+    /* File upload */
+    .file-upload-area {
+      border: 2px dashed #2a2b35;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 8px;
+      position: relative;
+    }
+    .file-upload-area:hover { border-color: #6366f1; background: rgba(99,102,241,0.05); }
+    .file-upload-area.has-file { border-color: #22c55e; background: rgba(34,197,94,0.05); }
+    .file-upload-area input[type=file] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .file-upload-area .hint { color: #71717a; font-size: 13px; }
+    .file-upload-area .filename { color: #22c55e; font-size: 13px; font-weight: 500; }
+    .input-divider {
+      display: flex; align-items: center; gap: 12px; margin: 10px 0; color: #71717a; font-size: 12px;
+    }
+    .input-divider::before, .input-divider::after {
+      content: ''; flex: 1; height: 1px; background: #2a2b35;
+    }
+
     /* Toast */
     .toast {
       position: fixed; top: 20px; right: 20px;
@@ -420,23 +446,54 @@ export function getDashboardPage() {
     <div class="modal">
       <h2>添加账号</h2>
       <div class="modal-tabs">
-        <button class="modal-tab active" onclick="switchAddTab('auth_json')">auth.json</button>
-        <button class="modal-tab" onclick="switchAddTab('apikey')">API Key</button>
+        <button class="modal-tab active" data-tab="auth_json">auth.json</button>
+        <button class="modal-tab" data-tab="auth_v2">auth.v2</button>
+        <button class="modal-tab" data-tab="apikey">API Key</button>
       </div>
+
       <!-- auth.json tab -->
       <div class="tab-pane active" id="tabAuthJson">
         <div class="form-group">
-          <label for="authJsonInput">auth.json 内容</label>
-          <textarea id="authJsonInput" placeholder='请粘贴 auth.json 文件的内容...'></textarea>
+          <label>上传文件</label>
+          <div class="file-upload-area" id="authJsonFileArea">
+            <input type="file" accept=".json" onchange="onFileSelected(this, 'authJsonInput', 'authJsonFileArea')">
+            <div class="hint" id="authJsonFileHint">点击或拖拽上传 auth.json</div>
+          </div>
+          <div class="input-divider">或手动粘贴</div>
+          <textarea id="authJsonInput" placeholder='{ "access_token": "...", "refresh_token": "..." }' rows="5"></textarea>
         </div>
       </div>
+
+      <!-- auth.v2 tab -->
+      <div class="tab-pane" id="tabAuthV2">
+        <div class="form-group">
+          <label>auth.v2.file</label>
+          <div class="file-upload-area" id="v2FileArea">
+            <input type="file" onchange="onFileSelected(this, 'v2FileInput', 'v2FileArea')">
+            <div class="hint" id="v2FileHint">点击或拖拽上传 auth.v2.file</div>
+          </div>
+          <div class="input-divider">或手动粘贴</div>
+          <textarea id="v2FileInput" placeholder="IV:AuthTag:Ciphertext (Base64)" rows="3"></textarea>
+        </div>
+        <div class="form-group">
+          <label>auth.v2.key</label>
+          <div class="file-upload-area" id="v2KeyArea">
+            <input type="file" onchange="onFileSelected(this, 'v2KeyInput', 'v2KeyArea')">
+            <div class="hint" id="v2KeyHint">点击或拖拽上传 auth.v2.key</div>
+          </div>
+          <div class="input-divider">或手动粘贴</div>
+          <input type="text" id="v2KeyInput" placeholder="Base64 编码的密钥">
+        </div>
+      </div>
+
       <!-- API Key tab -->
       <div class="tab-pane" id="tabApiKey">
         <div class="form-group">
-          <label for="apiKeyInput">API Key</label>
+          <label>API Key</label>
           <input type="text" id="apiKeyInput" placeholder="请输入 API Key（如 FACTORY_API_KEY）">
         </div>
       </div>
+
       <!-- Shared fields -->
       <div class="form-group">
         <label for="labelInput">标签（可选）</label>
@@ -529,7 +586,11 @@ export function getDashboardPage() {
           checking: '<span class="badge badge-checking">验证中</span>',
           disabled: '<span class="badge badge-disabled">已禁用</span>'
         };
-        const statusBadge = statusMap[a.status] || statusMap.error;
+        let statusBadge = statusMap[a.status] || statusMap.error;
+        if (a.cooldown) {
+          const cdSec = Math.max(0, Math.ceil((a.cooldown.until - Date.now()) / 1000));
+          statusBadge += ' <span class="badge badge-cooldown" title="' + esc(a.cooldown.reason) + '">冷却' + cdSec + 's</span>';
+        }
 
         const isApiKey = a.type === 'apikey';
         const typeBadge = isApiKey ? ' <span class="text-muted">[Key]</span>' : '';
@@ -580,26 +641,64 @@ export function getDashboardPage() {
     // ── Actions ──
     let currentAddTab = 'auth_json';
 
-    function switchAddTab(tab) {
-      currentAddTab = tab;
-      document.querySelectorAll('.modal-tab').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
-      if (tab === 'auth_json') {
-        document.querySelector('.modal-tab:nth-child(1)').classList.add('active');
-        document.getElementById('tabAuthJson').classList.add('active');
-      } else {
-        document.querySelector('.modal-tab:nth-child(2)').classList.add('active');
-        document.getElementById('tabApiKey').classList.add('active');
-      }
+    // Tab switching
+    document.querySelectorAll('.modal-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        currentAddTab = tab;
+        document.querySelectorAll('.modal-tab').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+        btn.classList.add('active');
+        const paneMap = { auth_json: 'tabAuthJson', auth_v2: 'tabAuthV2', apikey: 'tabApiKey' };
+        document.getElementById(paneMap[tab]).classList.add('active');
+      });
+    });
+
+    // File upload handler: read file content into a textarea/input
+    function onFileSelected(fileInput, targetId, areaId) {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        document.getElementById(targetId).value = e.target.result;
+        const area = document.getElementById(areaId);
+        area.classList.add('has-file');
+        // Replace hint with filename
+        const hint = area.querySelector('.hint');
+        if (hint) hint.innerHTML = '<span class="filename">' + esc(file.name) + '</span> 已选择';
+      };
+      reader.readAsText(file);
+    }
+
+    function resetFileArea(areaId, hintText) {
+      const area = document.getElementById(areaId);
+      if (!area) return;
+      area.classList.remove('has-file');
+      const hint = area.querySelector('.hint');
+      if (hint) hint.textContent = hintText;
+      const inp = area.querySelector('input[type=file]');
+      if (inp) inp.value = '';
     }
 
     function showAddModal() {
       document.getElementById('addModal').classList.remove('hidden');
+      // Reset all fields
       document.getElementById('authJsonInput').value = '';
+      document.getElementById('v2FileInput').value = '';
+      document.getElementById('v2KeyInput').value = '';
       document.getElementById('apiKeyInput').value = '';
       document.getElementById('labelInput').value = '';
-      switchAddTab('auth_json');
+      resetFileArea('authJsonFileArea', '点击或拖拽上传 auth.json');
+      resetFileArea('v2FileArea', '点击或拖拽上传 auth.v2.file');
+      resetFileArea('v2KeyArea', '点击或拖拽上传 auth.v2.key');
+      // Reset to first tab
+      currentAddTab = 'auth_json';
+      document.querySelectorAll('.modal-tab').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+      document.querySelector('.modal-tab[data-tab="auth_json"]').classList.add('active');
+      document.getElementById('tabAuthJson').classList.add('active');
     }
+
     function hideAddModal() {
       document.getElementById('addModal').classList.add('hidden');
     }
@@ -615,11 +714,17 @@ export function getDashboardPage() {
           const apiKey = document.getElementById('apiKeyInput').value.trim();
           if (!apiKey) throw new Error('请输入 API Key');
           body = { type: 'apikey', apiKey, label };
+        } else if (currentAddTab === 'auth_v2') {
+          const v2File = document.getElementById('v2FileInput').value.trim();
+          const v2Key = document.getElementById('v2KeyInput').value.trim();
+          if (!v2File) throw new Error('请提供 auth.v2.file 的内容');
+          if (!v2Key) throw new Error('请提供 auth.v2.key 的内容');
+          body = { type: 'auth_v2', v2File, v2Key, label };
         } else {
           const raw = document.getElementById('authJsonInput').value.trim();
-          if (!raw) throw new Error('请粘贴 auth.json 内容');
+          if (!raw) throw new Error('请提供 auth.json 的内容');
           const authData = JSON.parse(raw);
-          body = { authData, label };
+          body = { type: 'auth_json', authData, label };
         }
 
         const res = await api('POST', '/admin/api/accounts', body);

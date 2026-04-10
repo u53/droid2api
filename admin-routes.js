@@ -10,6 +10,7 @@ import {
   getAllAccounts,
   addAccount,
   addApiKeyAccount,
+  decryptAuthV2,
   initializeAccount,
   removeAccount,
   updateAccount,
@@ -79,19 +80,26 @@ adminRouter.get('/admin/api/accounts', requireAuth, (req, res) => {
   res.json({ accounts: getAllAccounts() });
 });
 
-// Add account (auth.json or API Key)
+// Add account (auth.json / auth.v2 / API Key)
 // Creates account in 'checking' state, then verifies (refresh token + check balance)
 adminRouter.post('/admin/api/accounts', requireAuth, async (req, res) => {
   try {
-    const { authData, apiKey, label, type } = req.body;
+    const { authData, apiKey, v2File, v2Key, label, type } = req.body;
 
     let account;
-    if (type === 'apikey' || apiKey) {
-      const key = apiKey || '';
-      account = addApiKeyAccount(key, label);
+    if (type === 'apikey') {
+      account = addApiKeyAccount(apiKey || '', label);
+    } else if (type === 'auth_v2') {
+      // Decrypt auth.v2 files then create account
+      if (!v2File || !v2Key) {
+        return res.status(400).json({ error: 'Bad Request', message: '请提供 auth.v2.file 和 auth.v2.key 的内容' });
+      }
+      const decrypted = decryptAuthV2(v2File, v2Key);
+      account = addAccount(decrypted, label);
     } else {
+      // auth_json (default)
       if (!authData || typeof authData !== 'object') {
-        return res.status(400).json({ error: 'Bad Request', message: '请提供 authData 对象或 apiKey 字符串' });
+        return res.status(400).json({ error: 'Bad Request', message: '请提供 auth.json 内容' });
       }
       account = addAccount(authData, label);
     }

@@ -9,10 +9,14 @@ import { transformToGoogle, getGoogleHeaders } from './transformers/request-goog
 import { AnthropicResponseTransformer } from './transformers/response-anthropic.js';
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { GoogleResponseTransformer } from './transformers/response-google.js';
-import { getApiKey } from './auth.js';
+import { getApiKey, reportApiKeyFailure } from './auth.js';
+import { hasAccounts } from './account-manager.js';
 import { getNextProxyAgent } from './proxy-manager.js';
 
 const router = express.Router();
+
+// Status codes that trigger account rotation retry
+const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
 
 /**
  * Convert a /v1/responses API result to a /v1/chat/completions-compatible format.
@@ -149,77 +153,82 @@ async function handleChatCompletions(req, res) {
 
     logInfo(`Routing to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    // Get API key (will auto-refresh if needed)
-    let authHeader;
-    try {
-      authHeader = await getApiKey(req.headers.authorization);
-    } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({ 
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
-      });
-    }
-
-    let transformedRequest;
-    let headers;
     const clientHeaders = req.headers;
-
-    // Log received client headers for debugging
-    logDebug('Client headers received', {
-      'x-factory-client': clientHeaders['x-factory-client'],
-      'x-session-id': clientHeaders['x-session-id'],
-      'x-assistant-message-id': clientHeaders['x-assistant-message-id'],
-      'user-agent': clientHeaders['user-agent']
-    });
-
-    // Update request body with redirected model ID before transformation
     const requestWithRedirectedModel = { ...openaiRequest, model: modelId };
-
-    // Get provider from model config
     const provider = getModelProvider(modelId);
+    const useRetry = hasAccounts();
 
+    // Transform request (only needs to be done once)
+    let transformedRequest;
     if (model.type === 'anthropic') {
       transformedRequest = transformToAnthropic(requestWithRedirectedModel);
-      const isStreaming = openaiRequest.stream === true;
-      headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId, provider);
     } else if (model.type === 'openai') {
       transformedRequest = transformToOpenAI(requestWithRedirectedModel);
-      headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
     } else if (model.type === 'google') {
       transformedRequest = transformToGoogle(requestWithRedirectedModel);
-      headers = getGoogleHeaders(authHeader, clientHeaders, provider);
     } else if (model.type === 'common') {
       transformedRequest = transformToCommon(requestWithRedirectedModel);
-      headers = getCommonHeaders(authHeader, clientHeaders, provider);
     } else {
       return res.status(500).json({ error: `Unknown endpoint type: ${model.type}` });
     }
 
-    logRequest('POST', endpoint.base_url, headers, transformedRequest);
+    // Retry loop: try different accounts on retryable errors
+    const triedTokens = [];
+    let response;
+    let lastErrorStatus = 500;
+    let lastErrorText = '';
 
-    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
-    const fetchOptions = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(transformedRequest)
-    };
+    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+      let authHeader;
+      try {
+        authHeader = await getApiKey(req.headers.authorization, triedTokens);
+      } catch (error) {
+        logError('Failed to get API key', error);
+        if (attempt > 0) break; // had retries, break to return last error
+        return res.status(500).json({ error: 'API key not available', message: error.message });
+      }
 
-    if (proxyAgentInfo?.agent) {
-      fetchOptions.agent = proxyAgentInfo.agent;
+      let headers;
+      if (model.type === 'anthropic') {
+        headers = getAnthropicHeaders(authHeader, clientHeaders, openaiRequest.stream === true, modelId, provider);
+      } else if (model.type === 'openai') {
+        headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
+      } else if (model.type === 'google') {
+        headers = getGoogleHeaders(authHeader, clientHeaders, provider);
+      } else {
+        headers = getCommonHeaders(authHeader, clientHeaders, provider);
+      }
+
+      logRequest('POST', endpoint.base_url, headers, transformedRequest);
+
+      const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+      const fetchOptions = { method: 'POST', headers, body: JSON.stringify(transformedRequest) };
+      if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
+
+      response = await fetch(endpoint.base_url, fetchOptions);
+      logInfo(`Response status: ${response.status}`);
+
+      if (response.ok) break; // Success
+
+      // Check if retryable
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+        lastErrorText = await response.text();
+        lastErrorStatus = response.status;
+        reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        triedTokens.push(authHeader);
+        logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
+        continue;
+      }
+
+      // Non-retryable error or last attempt
+      const errorText = lastErrorText || await response.text();
+      logError(`Endpoint error: ${response.status}`, new Error(errorText));
+      return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }
 
-    const response = await fetch(endpoint.base_url, fetchOptions);
-
-    logInfo(`Response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
-        error: `Endpoint returned ${response.status}`,
-        details: errorText 
-      });
+    // If we exhausted retries without a successful response
+    if (!response || !response.ok) {
+      return res.status(lastErrorStatus).json({ error: `Endpoint returned ${lastErrorStatus}`, details: lastErrorText });
     }
 
     const isStreaming = openaiRequest.stream === true;
@@ -333,82 +342,69 @@ async function handleDirectResponses(req, res) {
 
     logInfo(`Direct forwarding to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    // Get API key - support client x-api-key for anthropic endpoint
-    let authHeader;
-    try {
-      const clientAuthFromXApiKey = req.headers['x-api-key']
-        ? `Bearer ${req.headers['x-api-key']}`
-        : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
-    } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({ 
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
-      });
-    }
-
     const clientHeaders = req.headers;
-    
-    // Get provider from model config
+    const clientAuth = req.headers['x-api-key'] ? `Bearer ${req.headers['x-api-key']}` : req.headers.authorization;
     const provider = getModelProvider(modelId);
-    
-    // 获取 headers
-    const headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
+    const useRetry = hasAccounts();
 
-    // 注入系统提示到 instructions 字段，并更新重定向后的模型ID
+    // Build modified request (once)
     const systemPrompt = getSystemPrompt();
     const modifiedRequest = { ...openaiRequest, model: modelId };
     if (systemPrompt) {
-      // 如果已有 instructions，则在前面添加系统提示
-      if (modifiedRequest.instructions) {
-        modifiedRequest.instructions = systemPrompt + modifiedRequest.instructions;
-      } else {
-        // 否则直接设置系统提示
-        modifiedRequest.instructions = systemPrompt;
-      }
+      modifiedRequest.instructions = modifiedRequest.instructions
+        ? systemPrompt + modifiedRequest.instructions
+        : systemPrompt;
     }
-
-    // 处理reasoning字段
     const reasoningLevel = getModelReasoning(modelId);
-    if (reasoningLevel === 'auto') {
-      // Auto模式：保持原始请求的reasoning字段不变
-      // 如果原始请求有reasoning字段就保留，没有就不添加
-    } else if (reasoningLevel && ['low', 'medium', 'high', 'xhigh'].includes(reasoningLevel)) {
-      modifiedRequest.reasoning = {
-        effort: reasoningLevel,
-        summary: 'auto'
-      };
-    } else {
-      // 如果配置是off或无效，移除reasoning字段
-      delete modifiedRequest.reasoning;
-    }
+    if (reasoningLevel === 'auto') { /* keep */ }
+    else if (reasoningLevel && ['low', 'medium', 'high', 'xhigh'].includes(reasoningLevel)) {
+      modifiedRequest.reasoning = { effort: reasoningLevel, summary: 'auto' };
+    } else { delete modifiedRequest.reasoning; }
 
-    logRequest('POST', endpoint.base_url, headers, modifiedRequest);
+    // Retry loop
+    const triedTokens = [];
+    let response;
+    let lastErrorStatus = 500;
+    let lastErrorText = '';
 
-    // 转发修改后的请求
-    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
-    const fetchOptions = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(modifiedRequest)
-    };
+    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+      let authHeader;
+      try {
+        authHeader = await getApiKey(clientAuth, triedTokens);
+      } catch (error) {
+        logError('Failed to get API key', error);
+        if (attempt > 0) break;
+        return res.status(500).json({ error: 'API key not available', message: error.message });
+      }
 
-    if (proxyAgentInfo?.agent) {
-      fetchOptions.agent = proxyAgentInfo.agent;
-    }
+      const headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
+      logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
-    const response = await fetch(endpoint.base_url, fetchOptions);
+      const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+      const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
+      if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-    logInfo(`Response status: ${response.status}`);
+      response = await fetch(endpoint.base_url, fetchOptions);
+      logInfo(`Response status: ${response.status}`);
 
-    if (!response.ok) {
-      const errorText = await response.text();
+      if (response.ok) break;
+
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+        lastErrorText = await response.text();
+        lastErrorStatus = response.status;
+        reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        triedTokens.push(authHeader);
+        logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
+        continue;
+      }
+
+      const errorText = lastErrorText || await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
-        error: `Endpoint returned ${response.status}`,
-        details: errorText 
-      });
+      return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
+    }
+
+    if (!response || !response.ok) {
+      return res.status(lastErrorStatus).json({ error: `Endpoint returned ${lastErrorStatus}`, details: lastErrorText });
     }
 
     const isStreaming = openaiRequest.stream === true;
@@ -480,88 +476,70 @@ async function handleDirectMessages(req, res) {
 
     logInfo(`Direct forwarding to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    // Get API key - support client x-api-key for anthropic endpoint
-    let authHeader;
-    try {
-      const clientAuthFromXApiKey = req.headers['x-api-key']
-        ? `Bearer ${req.headers['x-api-key']}`
-        : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
-    } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({ 
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
-      });
-    }
-
     const clientHeaders = req.headers;
-    
-    // Get provider from model config
+    const clientAuth = req.headers['x-api-key'] ? `Bearer ${req.headers['x-api-key']}` : req.headers.authorization;
     const provider = getModelProvider(modelId);
-    
-    // 获取 headers
     const isStreaming = anthropicRequest.stream === true;
-    const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId, provider);
+    const useRetry = hasAccounts();
 
-    // 强制使用配置中的系统提示，并更新重定向后的模型ID
+    // Build modified request (once)
     const systemPrompt = getSystemPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
     if (systemPrompt) {
-      modifiedRequest.system = [
-        { type: 'text', text: systemPrompt }
-      ];
-    } else {
-      delete modifiedRequest.system;
-    }
+      modifiedRequest.system = [{ type: 'text', text: systemPrompt }];
+    } else { delete modifiedRequest.system; }
 
-    // 处理thinking字段
     const reasoningLevel = getModelReasoning(modelId);
-    if (reasoningLevel === 'auto') {
-      // Auto模式：保持原始请求的thinking字段不变
-      // 如果原始请求有thinking字段就保留，没有就不添加
-    } else if (reasoningLevel && ['low', 'medium', 'high', 'xhigh'].includes(reasoningLevel)) {
-      const budgetTokens = {
-        'low': 4096,
-        'medium': 12288,
-        'high': 24576,
-        'xhigh': 40960
-      };
-      
-      modifiedRequest.thinking = {
-        type: 'enabled',
-        budget_tokens: budgetTokens[reasoningLevel]
-      };
-    } else {
-      // 如果配置是off或无效，移除thinking字段
-      delete modifiedRequest.thinking;
-    }
+    if (reasoningLevel === 'auto') { /* keep */ }
+    else if (reasoningLevel && ['low', 'medium', 'high', 'xhigh'].includes(reasoningLevel)) {
+      const budgetTokens = { low: 4096, medium: 12288, high: 24576, xhigh: 40960 };
+      modifiedRequest.thinking = { type: 'enabled', budget_tokens: budgetTokens[reasoningLevel] };
+    } else { delete modifiedRequest.thinking; }
 
-    logRequest('POST', endpoint.base_url, headers, modifiedRequest);
+    // Retry loop
+    const triedTokens = [];
+    let response;
+    let lastErrorStatus = 500;
+    let lastErrorText = '';
 
-    // 转发修改后的请求
-    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
-    const fetchOptions = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(modifiedRequest)
-    };
+    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+      let authHeader;
+      try {
+        authHeader = await getApiKey(clientAuth, triedTokens);
+      } catch (error) {
+        logError('Failed to get API key', error);
+        if (attempt > 0) break;
+        return res.status(500).json({ error: 'API key not available', message: error.message });
+      }
 
-    if (proxyAgentInfo?.agent) {
-      fetchOptions.agent = proxyAgentInfo.agent;
-    }
+      const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId, provider);
+      logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
-    const response = await fetch(endpoint.base_url, fetchOptions);
+      const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+      const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
+      if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-    logInfo(`Response status: ${response.status}`);
+      response = await fetch(endpoint.base_url, fetchOptions);
+      logInfo(`Response status: ${response.status}`);
 
-    if (!response.ok) {
-      const errorText = await response.text();
+      if (response.ok) break;
+
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+        lastErrorText = await response.text();
+        lastErrorStatus = response.status;
+        reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        triedTokens.push(authHeader);
+        logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
+        continue;
+      }
+
+      const errorText = lastErrorText || await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
-        error: `Endpoint returned ${response.status}`,
-        details: errorText 
-      });
+      return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
+    }
+
+    if (!response || !response.ok) {
+      return res.status(lastErrorStatus).json({ error: `Endpoint returned ${lastErrorStatus}`, details: lastErrorText });
     }
 
     if (isStreaming) {
@@ -629,67 +607,64 @@ async function handleCountTokens(req, res) {
       return res.status(500).json({ error: 'Endpoint type anthropic not found' });
     }
 
-    // Get API key
-    let authHeader;
-    try {
-      const clientAuthFromXApiKey = req.headers['x-api-key']
-        ? `Bearer ${req.headers['x-api-key']}`
-        : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
-    } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
-      });
-    }
-
     const clientHeaders = req.headers;
-    
-    // Get provider from model config
+    const clientAuth = req.headers['x-api-key'] ? `Bearer ${req.headers['x-api-key']}` : req.headers.authorization;
     const provider = getModelProvider(modelId);
-    
-    const headers = getAnthropicHeaders(authHeader, clientHeaders, false, modelId, provider);
-
-    // 构建 count_tokens 端点 URL
     const countTokensUrl = endpoint.base_url.replace('/v1/messages', '/v1/messages/count_tokens');
+    const useRetry = hasAccounts();
 
-    // 强制使用配置中的系统提示，并更新请求体中的模型ID
     const systemPrompt = getSystemPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
     if (systemPrompt) {
-      modifiedRequest.system = [
-        { type: 'text', text: systemPrompt }
-      ];
-    } else {
-      delete modifiedRequest.system;
-    }
+      modifiedRequest.system = [{ type: 'text', text: systemPrompt }];
+    } else { delete modifiedRequest.system; }
 
     logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
-    logRequest('POST', countTokensUrl, headers, modifiedRequest);
 
-    const proxyAgentInfo = getNextProxyAgent(countTokensUrl);
-    const fetchOptions = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(modifiedRequest)
-    };
+    // Retry loop
+    const triedTokens = [];
+    let response;
+    let lastErrorStatus = 500;
+    let lastErrorText = '';
 
-    if (proxyAgentInfo?.agent) {
-      fetchOptions.agent = proxyAgentInfo.agent;
+    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+      let authHeader;
+      try {
+        authHeader = await getApiKey(clientAuth, triedTokens);
+      } catch (error) {
+        logError('Failed to get API key', error);
+        if (attempt > 0) break;
+        return res.status(500).json({ error: 'API key not available', message: error.message });
+      }
+
+      const headers = getAnthropicHeaders(authHeader, clientHeaders, false, modelId, provider);
+      logRequest('POST', countTokensUrl, headers, modifiedRequest);
+
+      const proxyAgentInfo = getNextProxyAgent(countTokensUrl);
+      const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
+      if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
+
+      response = await fetch(countTokensUrl, fetchOptions);
+      logInfo(`Response status: ${response.status}`);
+
+      if (response.ok) break;
+
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+        lastErrorText = await response.text();
+        lastErrorStatus = response.status;
+        reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        triedTokens.push(authHeader);
+        logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
+        continue;
+      }
+
+      const errorText = lastErrorText || await response.text();
+      logError(`Count tokens error: ${response.status}`, new Error(errorText));
+      return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }
 
-    const response = await fetch(countTokensUrl, fetchOptions);
-
-    logInfo(`Response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logError(`Count tokens error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({
-        error: `Endpoint returned ${response.status}`,
-        details: errorText
-      });
+    if (!response || !response.ok) {
+      return res.status(lastErrorStatus).json({ error: `Endpoint returned ${lastErrorStatus}`, details: lastErrorText });
     }
 
     const data = await response.json();
@@ -739,88 +714,79 @@ async function handleDirectGenerate(req, res) {
 
     logInfo(`Direct forwarding to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    let authHeader;
-    try {
-      authHeader = await getApiKey(req.headers.authorization);
-    } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
-      });
-    }
-
     const clientHeaders = req.headers;
-
-    // Get provider from model config
     const provider = getModelProvider(modelId);
+    const useRetry = hasAccounts();
 
-    const headers = getGoogleHeaders(authHeader, clientHeaders, provider);
-
-    // 注入系统提示到 systemInstruction 字段，并更新重定向后的模型ID
+    // Build modified request (once)
     const systemPrompt = getSystemPrompt();
     const modifiedRequest = { ...googleRequest, model: modelId };
     if (systemPrompt) {
-      if (modifiedRequest.systemInstruction && modifiedRequest.systemInstruction.parts && Array.isArray(modifiedRequest.systemInstruction.parts)) {
-        // 在 parts 数组最前面插入系统提示
+      if (modifiedRequest.systemInstruction?.parts && Array.isArray(modifiedRequest.systemInstruction.parts)) {
         modifiedRequest.systemInstruction = {
           ...modifiedRequest.systemInstruction,
-          parts: [
-            { text: systemPrompt },
-            ...modifiedRequest.systemInstruction.parts
-          ]
+          parts: [{ text: systemPrompt }, ...modifiedRequest.systemInstruction.parts]
         };
       } else {
-        modifiedRequest.systemInstruction = {
-          parts: [{ text: systemPrompt }]
-        };
+        modifiedRequest.systemInstruction = { parts: [{ text: systemPrompt }] };
       }
     }
 
-    // 处理 thinkingConfig.thinkingLevel 字段
     const reasoningLevel = getModelReasoning(modelId);
-    if (reasoningLevel === 'auto') {
-      // Auto模式：保持原始请求的 thinkingConfig 字段不变
-    } else if (reasoningLevel && ['low', 'medium', 'high'].includes(reasoningLevel)) {
-      const levelMap = { 'low': 'LOW', 'medium': 'MEDIUM', 'high': 'HIGH' };
-      if (!modifiedRequest.generationConfig) {
-        modifiedRequest.generationConfig = {};
-      }
-      if (!modifiedRequest.generationConfig.thinkingConfig) {
-        modifiedRequest.generationConfig.thinkingConfig = {};
-      }
+    if (reasoningLevel === 'auto') { /* keep */ }
+    else if (reasoningLevel && ['low', 'medium', 'high'].includes(reasoningLevel)) {
+      const levelMap = { low: 'LOW', medium: 'MEDIUM', high: 'HIGH' };
+      if (!modifiedRequest.generationConfig) modifiedRequest.generationConfig = {};
+      if (!modifiedRequest.generationConfig.thinkingConfig) modifiedRequest.generationConfig.thinkingConfig = {};
       modifiedRequest.generationConfig.thinkingConfig.thinkingLevel = levelMap[reasoningLevel];
     } else {
-      // 如果配置是off或无效，移除 thinkingConfig 字段
-      if (modifiedRequest.generationConfig) {
-        delete modifiedRequest.generationConfig.thinkingConfig;
+      if (modifiedRequest.generationConfig) delete modifiedRequest.generationConfig.thinkingConfig;
+    }
+
+    // Retry loop
+    const triedTokens = [];
+    let response;
+    let lastErrorStatus = 500;
+    let lastErrorText = '';
+
+    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+      let authHeader;
+      try {
+        authHeader = await getApiKey(req.headers.authorization, triedTokens);
+      } catch (error) {
+        logError('Failed to get API key', error);
+        if (attempt > 0) break;
+        return res.status(500).json({ error: 'API key not available', message: error.message });
       }
-    }
 
-    logRequest('POST', endpoint.base_url, headers, modifiedRequest);
+      const headers = getGoogleHeaders(authHeader, clientHeaders, provider);
+      logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
-    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
-    const fetchOptions = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(modifiedRequest)
-    };
+      const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+      const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
+      if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-    if (proxyAgentInfo?.agent) {
-      fetchOptions.agent = proxyAgentInfo.agent;
-    }
+      response = await fetch(endpoint.base_url, fetchOptions);
+      logInfo(`Response status: ${response.status}`);
 
-    const response = await fetch(endpoint.base_url, fetchOptions);
+      if (response.ok) break;
 
-    logInfo(`Response status: ${response.status}`);
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+        lastErrorText = await response.text();
+        lastErrorStatus = response.status;
+        reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        triedTokens.push(authHeader);
+        logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
+        continue;
+      }
 
-    if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = lastErrorText || await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({
-        error: `Endpoint returned ${response.status}`,
-        details: errorText
-      });
+      return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
+    }
+
+    if (!response || !response.ok) {
+      return res.status(lastErrorStatus).json({ error: `Endpoint returned ${lastErrorStatus}`, details: lastErrorText });
     }
 
     const isStreaming = googleRequest.stream === true;
