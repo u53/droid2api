@@ -52,6 +52,11 @@ export function getSystemPrompt() {
   return cfg.system_prompt || '';
 }
 
+export function getSystemAppendPrompt() {
+  const cfg = getConfig();
+  return cfg.system_append_prompt || '';
+}
+
 export function getModelReasoning(modelId) {
   const model = getModelById(modelId);
   if (!model || !model.reasoning) {

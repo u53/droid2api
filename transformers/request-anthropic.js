@@ -1,5 +1,5 @@
 import { logDebug } from '../logger.js';
-import { getSystemPrompt, getModelReasoning, getModelFast, getUserAgent } from '../config.js';
+import { getSystemPrompt, getSystemAppendPrompt, getModelReasoning, getModelFast, getUserAgent } from '../config.js';
 
 export function transformToAnthropic(openaiRequest) {
   logDebug('Transforming OpenAI request to Anthropic format');
@@ -63,13 +63,23 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // Always use the configured system prompt for Anthropic forwarding
+  // Always use the configured system prompt(s) for Anthropic forwarding
   const systemPrompt = getSystemPrompt();
-  if (systemPrompt) {
-    anthropicRequest.system = [{
-      type: 'text',
-      text: systemPrompt
-    }];
+  const systemAppendPrompt = getSystemAppendPrompt();
+  if (systemPrompt || systemAppendPrompt) {
+    anthropicRequest.system = [];
+    if (systemPrompt) {
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemPrompt
+      });
+    }
+    if (systemAppendPrompt) {
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemAppendPrompt
+      });
+    }
   }
 
   // Transform tools if present

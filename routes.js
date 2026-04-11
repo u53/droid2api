@@ -1,6 +1,6 @@
 import express from 'express';
 import fetch from 'node-fetch';
-import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getModelReasoning, getRedirectedModelId, getModelProvider } from './config.js';
+import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getSystemAppendPrompt, getModelReasoning, getRedirectedModelId, getModelProvider } from './config.js';
 import { logInfo, logDebug, logError, logRequest, logResponse } from './logger.js';
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
 import { transformToOpenAI, getOpenAIHeaders } from './transformers/request-openai.js';
@@ -17,6 +17,10 @@ const router = express.Router();
 
 // Status codes that trigger account rotation retry
 const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
+
+function isForbiddenError(status, detail) {
+  return status === 403 && /forbidden/i.test(detail || '');
+}
 
 /**
  * Convert a /v1/responses API result to a /v1/chat/completions-compatible format.
@@ -216,6 +220,9 @@ async function handleChatCompletions(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        if (isForbiddenError(response.status, lastErrorText)) {
+          break;
+        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
@@ -223,6 +230,9 @@ async function handleChatCompletions(req, res) {
 
       // Non-retryable error or last attempt
       const errorText = lastErrorText || await response.text();
+      if (useRetry && isForbiddenError(response.status, errorText)) {
+        reportApiKeyFailure(authHeader, response.status, errorText);
+      }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }
@@ -395,12 +405,18 @@ async function handleDirectResponses(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        if (isForbiddenError(response.status, lastErrorText)) {
+          break;
+        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
       }
 
       const errorText = lastErrorText || await response.text();
+      if (useRetry && isForbiddenError(response.status, errorText)) {
+        reportApiKeyFailure(authHeader, response.status, errorText);
+      }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }
@@ -486,10 +502,19 @@ async function handleDirectMessages(req, res) {
 
     // Build modified request (once)
     const systemPrompt = getSystemPrompt();
+    const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
-    if (systemPrompt) {
-      modifiedRequest.system = [{ type: 'text', text: systemPrompt }];
-    } else { delete modifiedRequest.system; }
+    if (systemPrompt || systemAppendPrompt) {
+      modifiedRequest.system = [];
+      if (systemPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
+      }
+      if (systemAppendPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
+      }
+    } else {
+      delete modifiedRequest.system;
+    }
 
     const reasoningLevel = getModelReasoning(modelId);
     if (reasoningLevel === 'auto') { /* keep */ }
@@ -531,12 +556,18 @@ async function handleDirectMessages(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        if (isForbiddenError(response.status, lastErrorText)) {
+          break;
+        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
       }
 
       const errorText = lastErrorText || await response.text();
+      if (useRetry && isForbiddenError(response.status, errorText)) {
+        reportApiKeyFailure(authHeader, response.status, errorText);
+      }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }
@@ -617,10 +648,19 @@ async function handleCountTokens(req, res) {
     const useRetry = hasAccounts();
 
     const systemPrompt = getSystemPrompt();
+    const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
-    if (systemPrompt) {
-      modifiedRequest.system = [{ type: 'text', text: systemPrompt }];
-    } else { delete modifiedRequest.system; }
+    if (systemPrompt || systemAppendPrompt) {
+      modifiedRequest.system = [];
+      if (systemPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
+      }
+      if (systemAppendPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
+      }
+    } else {
+      delete modifiedRequest.system;
+    }
 
     logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
 
@@ -657,6 +697,9 @@ async function handleCountTokens(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        if (isForbiddenError(response.status, lastErrorText)) {
+          break;
+        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
@@ -780,12 +823,18 @@ async function handleDirectGenerate(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
+        if (isForbiddenError(response.status, lastErrorText)) {
+          break;
+        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
       }
 
       const errorText = lastErrorText || await response.text();
+      if (useRetry && isForbiddenError(response.status, errorText)) {
+        reportApiKeyFailure(authHeader, response.status, errorText);
+      }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }

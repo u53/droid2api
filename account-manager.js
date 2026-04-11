@@ -277,8 +277,8 @@ export function updateAccount(id, updates) {
   }
   if (updates.label !== undefined) account.label = updates.label;
   if (updates.status !== undefined) {
-    if (!['active', 'disabled', 'error', 'exhausted', 'checking'].includes(updates.status)) {
-      throw new Error('Invalid status. Must be: active, disabled, error, exhausted, checking');
+    if (!['active', 'disabled', 'error', 'exhausted', 'checking', 'forbidden'].includes(updates.status)) {
+      throw new Error('Invalid status. Must be: active, disabled, error, exhausted, checking, forbidden');
     }
     account.status = updates.status;
     if (updates.status === 'active') {
@@ -351,7 +351,7 @@ export async function refreshAccountToken(account) {
       account.email = data.user.email;
     }
 
-    if (account.status === 'error') {
+    if (account.status === 'error' || account.status === 'forbidden') {
       account.status = 'active';
     }
 
@@ -531,6 +531,17 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
   const account = accounts.find(a => a.access_token === token);
   if (!account) return;
 
+  const trimmedReason = (reason || '').substring(0, 200);
+
+  if (statusCode === 403 && /forbidden/i.test(reason || '')) {
+    account.status = 'forbidden';
+    account.error_message = `生成接口被上游拒绝 (403 Forbidden): ${trimmedReason}`;
+    cooldownMap.delete(account.id);
+    saveAccounts();
+    logInfo(`[Forbidden] Account ${account.id} (${account.email || account.label || 'unknown'}) marked as forbidden`);
+    return;
+  }
+
   const reasonMap = {
     401: '认证失败 (401)',
     402: '额度不足 (402)',
@@ -539,7 +550,7 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
   };
 
   const displayReason = reasonMap[statusCode] || `HTTP ${statusCode}`;
-  const fullReason = `${displayReason}: ${(reason || '').substring(0, 200)}`;
+  const fullReason = `${displayReason}: ${trimmedReason}`;
 
   cooldownMap.set(account.id, {
     until: Date.now() + COOLDOWN_MS,
@@ -756,7 +767,8 @@ export function stopBackgroundTasks() {
 export function getSystemStatus() {
   const total = accounts.length;
   const active = accounts.filter(a => a.status === 'active').length;
-  const error = accounts.filter(a => a.status === 'error').length;
+  const forbidden = accounts.filter(a => a.status === 'forbidden').length;
+  const error = accounts.filter(a => a.status === 'error').length + forbidden;
   const disabled = accounts.filter(a => a.status === 'disabled').length;
   const exhausted = accounts.filter(a => a.status === 'exhausted').length;
   const checking = accounts.filter(a => a.status === 'checking').length;
@@ -768,6 +780,7 @@ export function getSystemStatus() {
     disabled,
     exhausted,
     checking,
+    forbidden,
     backgroundTasksRunning: backgroundTimers.length > 0
   };
 }
