@@ -23,11 +23,15 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Skip client system messages and transform other messages
+  // Collect client system messages and transform other messages
+  const clientSystemTexts = [];
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
-      // Always ignore client-provided system messages for Anthropic forwarding
       if (msg.role === 'system') {
+        // 收集客户端 system 消息，稍后合并到 Anthropic system 字段
+        const text = typeof msg.content === 'string' ? msg.content
+          : Array.isArray(msg.content) ? msg.content.map(p => p.text || '').join('\n') : '';
+        if (text) clientSystemTexts.push(text);
         continue;
       }
 
@@ -63,23 +67,21 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // Always use the configured system prompt(s) for Anthropic forwarding
+  // Build system prompt: configured prompt first, then client system messages, then append prompt
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
-  if (systemPrompt || systemAppendPrompt) {
-    anthropicRequest.system = [];
-    if (systemPrompt) {
-      anthropicRequest.system.push({
-        type: 'text',
-        text: systemPrompt
-      });
-    }
-    if (systemAppendPrompt) {
-      anthropicRequest.system.push({
-        type: 'text',
-        text: systemAppendPrompt
-      });
-    }
+  const systemParts = [];
+  if (systemPrompt) {
+    systemParts.push({ type: 'text', text: systemPrompt });
+  }
+  for (const text of clientSystemTexts) {
+    systemParts.push({ type: 'text', text });
+  }
+  if (systemAppendPrompt) {
+    systemParts.push({ type: 'text', text: systemAppendPrompt });
+  }
+  if (systemParts.length > 0) {
+    anthropicRequest.system = systemParts;
   }
 
   // Transform tools if present
