@@ -10,7 +10,7 @@ import { AnthropicResponseTransformer } from './transformers/response-anthropic.
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { GoogleResponseTransformer } from './transformers/response-google.js';
 import { getApiKey, reportApiKeyFailure } from './auth.js';
-import { hasAccounts } from './account-manager.js';
+import { hasAccounts, getActiveAccountCount } from './account-manager.js';
 import { getNextProxyAgent } from './proxy-manager.js';
 
 const router = express.Router();
@@ -178,7 +178,8 @@ async function handleChatCompletions(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
         authHeader = await getApiKey(req.headers.authorization, triedTokens);
@@ -211,7 +212,7 @@ async function handleChatCompletions(req, res) {
       if (response.ok) break; // Success
 
       // Check if retryable
-      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < maxAttempts - 1) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
@@ -367,7 +368,8 @@ async function handleDirectResponses(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
         authHeader = await getApiKey(clientAuth, triedTokens);
@@ -389,7 +391,7 @@ async function handleDirectResponses(req, res) {
 
       if (response.ok) break;
 
-      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < maxAttempts - 1) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
@@ -502,7 +504,8 @@ async function handleDirectMessages(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
         authHeader = await getApiKey(clientAuth, triedTokens);
@@ -524,7 +527,7 @@ async function handleDirectMessages(req, res) {
 
       if (response.ok) break;
 
-      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < maxAttempts - 1) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
@@ -627,7 +630,8 @@ async function handleCountTokens(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
         authHeader = await getApiKey(clientAuth, triedTokens);
@@ -649,7 +653,7 @@ async function handleCountTokens(req, res) {
 
       if (response.ok) break;
 
-      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < maxAttempts - 1) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
@@ -749,7 +753,8 @@ async function handleDirectGenerate(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    for (let attempt = 0; attempt < (useRetry ? MAX_RETRY_ATTEMPTS : 1); attempt++) {
+    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
         authHeader = await getApiKey(req.headers.authorization, triedTokens);
@@ -771,7 +776,7 @@ async function handleDirectGenerate(req, res) {
 
       if (response.ok) break;
 
-      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS - 1) {
+      if (useRetry && RETRYABLE_STATUSES.has(response.status) && attempt < maxAttempts - 1) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);

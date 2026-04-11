@@ -20,6 +20,10 @@ let backgroundTimers = [];
 const cooldownMap = new Map();
 const COOLDOWN_MS = 30 * 1000; // 30 seconds
 
+// Round-robin: track last-used timestamp per account to spread concurrent requests
+// Map<accountId, lastUsedTimestamp>
+const lastUsedMap = new Map();
+
 // ────────────────────────────────────────
 // Persistence
 // ────────────────────────────────────────
@@ -551,15 +555,31 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
 // ────────────────────────────────────────
 
 /**
+ * Get count of active accounts (for retry limit)
+ */
+export function getActiveAccountCount() {
+  return accounts.filter(a => a.status === 'active').length;
+}
+
+/**
  * Get next API key using smart scheduling
  * @param {string[]} excludeTokens - Bearer tokens to exclude (already tried in this request)
- * Priority: lowest usage ratio among active, non-cooled-down accounts
+ *
+ * Sorting priority:
+ *   1. usage ratio ascending (lowest first)
+ *   2. least-recently-used first (spread concurrent requests)
+ * Concurrency safety:
+ *   - Each request carries its own excludeTokens list, so retries within one
+ *     request never pick the same account twice.
+ *   - lastUsedMap ensures concurrent requests arriving at the same time are
+ *     distributed across different accounts (round-robin effect).
+ *   - cooldownMap is updated synchronously on failure report and immediately
+ *     visible to all subsequent getNextApiKey calls (single-threaded Node.js).
  */
 export async function getNextApiKey(excludeTokens = []) {
-  // Normalize exclude list
   const excludeSet = new Set(excludeTokens.map(t => t.replace(/^Bearer\s+/i, '')));
 
-  // 1. Filter active accounts, skip cooled-down and excluded
+  // 1. Filter: active, not cooled-down, not excluded
   const active = accounts.filter(a => {
     if (a.status !== 'active') return false;
     if (isAccountCoolingDown(a.id)) return false;
@@ -568,7 +588,6 @@ export async function getNextApiKey(excludeTokens = []) {
   });
 
   if (active.length === 0) {
-    // Check if some are just in cooldown
     const coolingDown = accounts.filter(a => a.status === 'active' && isAccountCoolingDown(a.id));
     if (coolingDown.length > 0) {
       throw new Error(`所有可用账号均在冷却中 (${coolingDown.length} 个)，请稍后重试`);
@@ -576,26 +595,31 @@ export async function getNextApiKey(excludeTokens = []) {
     throw new Error('没有可用的活跃账号');
   }
 
-  // 2. Exclude exhausted (usedRatio >= 0.95)
+  // 2. Exclude exhausted
   const available = active.filter(a => {
     if (!a.cached_balance) return true;
     return a.cached_balance.usedRatio < 0.95;
   });
-
   if (available.length === 0) {
     throw new Error('所有活跃账号额度均已耗尽 (>=95%)');
   }
 
-  // 3. Must have a token or refresh token
+  // 3. Must have token or refresh token
   const usable = available.filter(a => a.access_token || a.refresh_token);
   if (usable.length === 0) {
     throw new Error('没有可用的账号 (缺少 token)');
   }
 
-  // 4. Sort by usage ratio ascending
+  // 4. Sort: primary by usage ratio asc, secondary by least-recently-used
   usable.sort((a, b) => {
     const ratioA = a.cached_balance?.usedRatio ?? 0;
     const ratioB = b.cached_balance?.usedRatio ?? 0;
+    // If ratios are close (within 5%), prefer least recently used
+    if (Math.abs(ratioA - ratioB) < 0.05) {
+      const luA = lastUsedMap.get(a.id) || 0;
+      const luB = lastUsedMap.get(b.id) || 0;
+      return luA - luB; // smaller timestamp = used longer ago = preferred
+    }
     return ratioA - ratioB;
   });
 
@@ -604,6 +628,7 @@ export async function getNextApiKey(excludeTokens = []) {
     try {
       if (account.type === 'apikey') {
         if (!account.access_token) continue;
+        lastUsedMap.set(account.id, Date.now());
         logDebug(`Scheduled apikey account: ${account.id} (${account.label || 'no label'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
         return `Bearer ${account.access_token}`;
       }
@@ -622,6 +647,7 @@ export async function getNextApiKey(excludeTokens = []) {
         }
       }
 
+      lastUsedMap.set(account.id, Date.now());
       logDebug(`Scheduled account: ${account.id} (${account.email || 'no email'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
       return `Bearer ${account.access_token}`;
     } catch (error) {
