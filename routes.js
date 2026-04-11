@@ -48,37 +48,19 @@ function sanitizeClaudeCodeIdentity(text) {
 }
 
 /**
- * 从客户端请求中提取 system prompt blocks，净化后与服务器 prompt 合并
- * 策略：[服务器前置prompt] + [净化后的客户端prompt] + [服务器追加prompt(含身份恢复)]
+ * 构建发送给上游的 system prompt
+ * 策略：完全丢弃客户端的 system prompt（避免 Claude Code 模板指纹触发 Factory 403）
+ * 只使用服务器配置的 system_prompt 和 system_append_prompt
  */
 function buildMergedSystemPrompt(clientSystem) {
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
 
-  // 1. 解析客户端 system prompt
-  let clientBlocks = [];
-  if (clientSystem) {
-    if (typeof clientSystem === 'string') {
-      clientBlocks = [{ type: 'text', text: clientSystem }];
-    } else if (Array.isArray(clientSystem)) {
-      clientBlocks = clientSystem.map(b => ({ ...b }));
-    }
-  }
-
-  // 2. 净化客户端 blocks 中的 Claude Code 关键词
-  clientBlocks = clientBlocks.map(block => {
-    if (block.type === 'text' && block.text) {
-      return { ...block, text: sanitizeClaudeCodeIdentity(block.text) };
-    }
-    return block;
-  });
-
-  // 3. 组装: 服务器前置 + 净化后客户端 + 服务器追加(含身份恢复指令)
   const finalSystem = [];
   if (systemPrompt) {
     finalSystem.push({ type: 'text', text: systemPrompt });
   }
-  finalSystem.push(...clientBlocks);
+  // 客户端 system prompt 完全不保留 — Factory.ai 会对其结构做模式匹配
   if (systemAppendPrompt) {
     finalSystem.push({ type: 'text', text: systemAppendPrompt });
   }

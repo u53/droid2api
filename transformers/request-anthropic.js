@@ -23,15 +23,10 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Collect client system messages and transform other messages
-  const clientSystemTexts = [];
+  // Skip client system messages (Claude Code system prompt template triggers Factory 403)
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
       if (msg.role === 'system') {
-        // 收集客户端 system 消息，稍后净化合并
-        const text = typeof msg.content === 'string' ? msg.content :
-          (Array.isArray(msg.content) ? msg.content.map(p => p.text || '').join('') : '');
-        if (text) clientSystemTexts.push(text);
         continue;
       }
 
@@ -67,28 +62,13 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // 合并系统提示词：服务器前置 + 净化后的客户端system + 服务器追加
+  // 只使用服务器配置的 system prompt（客户端的已丢弃）
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
   {
     const finalSystem = [];
     if (systemPrompt) {
       finalSystem.push({ type: 'text', text: systemPrompt });
-    }
-    // 净化客户端 system 消息中会触发 Factory 403 的关键词
-    for (const text of clientSystemTexts) {
-      let cleaned = text;
-      cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'the CLI');
-      cleaned = cleaned.replace(/\bClaude Code\b/g, 'the assistant');
-      cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'the assistant');
-      cleaned = cleaned.replace(/You are Claude Code,/gi, 'You are an AI assistant,');
-      cleaned = cleaned.replace(/This is Claude Code/gi, 'This is an AI assistant');
-      cleaned = cleaned.replace(/Anthropic's official CLI for Claude/gi, "an AI coding assistant");
-      cleaned = cleaned.replace(/Anthropic's (?:official )?CLI/gi, 'an AI CLI tool');
-      cleaned = cleaned.replace(/\bAnthropic\b/g, 'the developer');
-      cleaned = cleaned.replace(/Claude Agent SDK/gi, 'the Agent SDK');
-      cleaned = cleaned.replace(/claude\.ai/gi, 'the platform');
-      finalSystem.push({ type: 'text', text: cleaned });
     }
     if (systemAppendPrompt) {
       finalSystem.push({ type: 'text', text: systemAppendPrompt });
