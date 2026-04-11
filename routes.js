@@ -504,24 +504,14 @@ async function handleDirectMessages(req, res) {
     const systemPrompt = getSystemPrompt();
     const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
-    // 合并: 配置的 system_prompt + 客户端原始 system + system_append_prompt
-    const systemParts = [];
-    if (systemPrompt) {
-      systemParts.push({ type: 'text', text: systemPrompt });
-    }
-    // 保留客户端原始 system 消息
-    if (anthropicRequest.system) {
-      if (typeof anthropicRequest.system === 'string') {
-        systemParts.push({ type: 'text', text: anthropicRequest.system });
-      } else if (Array.isArray(anthropicRequest.system)) {
-        systemParts.push(...anthropicRequest.system);
+    if (systemPrompt || systemAppendPrompt) {
+      modifiedRequest.system = [];
+      if (systemPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
       }
-    }
-    if (systemAppendPrompt) {
-      systemParts.push({ type: 'text', text: systemAppendPrompt });
-    }
-    if (systemParts.length > 0) {
-      modifiedRequest.system = systemParts;
+      if (systemAppendPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
+      }
     } else {
       delete modifiedRequest.system;
     }
@@ -660,22 +650,14 @@ async function handleCountTokens(req, res) {
     const systemPrompt = getSystemPrompt();
     const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
-    const ctSystemParts = [];
-    if (systemPrompt) {
-      ctSystemParts.push({ type: 'text', text: systemPrompt });
-    }
-    if (anthropicRequest.system) {
-      if (typeof anthropicRequest.system === 'string') {
-        ctSystemParts.push({ type: 'text', text: anthropicRequest.system });
-      } else if (Array.isArray(anthropicRequest.system)) {
-        ctSystemParts.push(...anthropicRequest.system);
+    if (systemPrompt || systemAppendPrompt) {
+      modifiedRequest.system = [];
+      if (systemPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
       }
-    }
-    if (systemAppendPrompt) {
-      ctSystemParts.push({ type: 'text', text: systemAppendPrompt });
-    }
-    if (ctSystemParts.length > 0) {
-      modifiedRequest.system = ctSystemParts;
+      if (systemAppendPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
+      }
     } else {
       delete modifiedRequest.system;
     }

@@ -23,15 +23,11 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Collect client system messages and transform other messages
-  const clientSystemTexts = [];
+  // Skip client system messages and transform other messages
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
+      // Always ignore client-provided system messages for Anthropic forwarding
       if (msg.role === 'system') {
-        // 收集客户端 system 消息，稍后合并到 Anthropic system 字段
-        const text = typeof msg.content === 'string' ? msg.content
-          : Array.isArray(msg.content) ? msg.content.map(p => p.text || '').join('\n') : '';
-        if (text) clientSystemTexts.push(text);
         continue;
       }
 
@@ -67,21 +63,23 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // Build system prompt: configured prompt first, then client system messages, then append prompt
+  // Always use the configured system prompt(s) for Anthropic forwarding
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
-  const systemParts = [];
-  if (systemPrompt) {
-    systemParts.push({ type: 'text', text: systemPrompt });
-  }
-  for (const text of clientSystemTexts) {
-    systemParts.push({ type: 'text', text });
-  }
-  if (systemAppendPrompt) {
-    systemParts.push({ type: 'text', text: systemAppendPrompt });
-  }
-  if (systemParts.length > 0) {
-    anthropicRequest.system = systemParts;
+  if (systemPrompt || systemAppendPrompt) {
+    anthropicRequest.system = [];
+    if (systemPrompt) {
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemPrompt
+      });
+    }
+    if (systemAppendPrompt) {
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemAppendPrompt
+      });
+    }
   }
 
   // Transform tools if present
@@ -142,13 +140,6 @@ export function transformToAnthropic(openaiRequest) {
   return anthropicRequest;
 }
 
-function isAllowedAnthropicBeta(betaValue) {
-  return betaValue !== 'claude-code-20250219'
-    && !betaValue.startsWith('context-1m-')
-    && !betaValue.startsWith('adaptive-thinking-')
-    && !betaValue.startsWith('effort-');
-}
-
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
@@ -171,15 +162,14 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
   // Handle anthropic-beta header based on reasoning configuration
   const reasoningLevel = modelId ? getModelReasoning(modelId) : null;
   let betaValues = [];
-  
-  // Add existing beta values from client headers
+
+  // 完整透传客户端 anthropic-beta，不做过滤
   if (clientHeaders['anthropic-beta']) {
     const existingBeta = clientHeaders['anthropic-beta'];
     betaValues = existingBeta
       .split(',')
       .map(v => v.trim())
-      .filter(Boolean)
-      .filter(isAllowedAnthropicBeta);
+      .filter(Boolean);
   }
   
   // Handle thinking beta based on reasoning configuration
