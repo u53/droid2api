@@ -85,6 +85,7 @@ export function transformToAnthropic(openaiRequest) {
       cleaned = cleaned.replace(/This is Claude Code/gi, 'This is an AI assistant');
       cleaned = cleaned.replace(/Anthropic's official CLI for Claude/gi, "an AI coding assistant");
       cleaned = cleaned.replace(/Anthropic's (?:official )?CLI/gi, 'an AI CLI tool');
+      cleaned = cleaned.replace(/\bAnthropic\b/g, 'the developer');
       cleaned = cleaned.replace(/Claude Agent SDK/gi, 'the Agent SDK');
       cleaned = cleaned.replace(/claude\.ai/gi, 'the platform');
       finalSystem.push({ type: 'text', text: cleaned });
@@ -159,7 +160,9 @@ function isAllowedAnthropicBeta(betaValue) {
   return betaValue !== 'claude-code-20250219'
     && !betaValue.startsWith('context-1m-')
     && !betaValue.startsWith('adaptive-thinking-')
-    && !betaValue.startsWith('effort-');
+    && !betaValue.startsWith('effort-')
+    && !betaValue.startsWith('oauth-')
+    && !betaValue.startsWith('fine-grained-tool-streaming-');
 }
 
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {

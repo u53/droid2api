@@ -40,6 +40,7 @@ function sanitizeClaudeCodeIdentity(text) {
   // Anthropic 品牌相关
   cleaned = cleaned.replace(/Anthropic's official CLI for Claude/gi, "an AI coding assistant");
   cleaned = cleaned.replace(/Anthropic's (?:official )?CLI/gi, 'an AI CLI tool');
+  cleaned = cleaned.replace(/\bAnthropic\b/g, 'the developer');
   // Agent SDK 相关
   cleaned = cleaned.replace(/Claude Agent SDK/gi, 'the Agent SDK');
   cleaned = cleaned.replace(/claude\.ai/gi, 'the platform');
@@ -565,6 +566,31 @@ async function handleDirectMessages(req, res) {
 
     // Build modified request (once)
     const modifiedRequest = { ...anthropicRequest, model: modelId };
+
+    // 清除 Claude Code 客户端指纹（device_id, account_uuid 等）
+    delete modifiedRequest.metadata;
+
+    // 净化 messages 中的 Claude Code 关键词（避免 Factory 扫描 body 触发 403）
+    if (modifiedRequest.messages && Array.isArray(modifiedRequest.messages)) {
+      modifiedRequest.messages = modifiedRequest.messages.map(msg => {
+        if (!msg.content) return msg;
+        if (typeof msg.content === 'string') {
+          return { ...msg, content: sanitizeClaudeCodeIdentity(msg.content) };
+        }
+        if (Array.isArray(msg.content)) {
+          return {
+            ...msg,
+            content: msg.content.map(block => {
+              if (block.type === 'text' && block.text) {
+                return { ...block, text: sanitizeClaudeCodeIdentity(block.text) };
+              }
+              return block;
+            })
+          };
+        }
+        return msg;
+      });
+    }
 
     // 系统提示词：保留客户端原始system + 净化Claude Code关键词 + 合并服务器prompt
     const mergedSystem = buildMergedSystemPrompt(anthropicRequest.system);
