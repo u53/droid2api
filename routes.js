@@ -505,22 +505,16 @@ async function handleDirectMessages(req, res) {
     const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
     if (systemPrompt || systemAppendPrompt) {
-      // Merge config system prompts with client's system prompts
-      const configSystem = [];
+      modifiedRequest.system = [];
       if (systemPrompt) {
-        configSystem.push({ type: 'text', text: systemPrompt });
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
       }
-      // Preserve client's original system blocks in between
-      const clientSystem = Array.isArray(anthropicRequest.system)
-        ? anthropicRequest.system
-        : (typeof anthropicRequest.system === 'string' ? [{ type: 'text', text: anthropicRequest.system }] : []);
-      const appendSystem = [];
       if (systemAppendPrompt) {
-        appendSystem.push({ type: 'text', text: systemAppendPrompt });
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
       }
-      modifiedRequest.system = [...configSystem, ...clientSystem, ...appendSystem];
+    } else {
+      delete modifiedRequest.system;
     }
-    // If no config prompts, keep client's original system as-is (don't delete it)
 
     const reasoningLevel = getModelReasoning(modelId);
     if (reasoningLevel === 'auto') { /* keep */ }
@@ -657,20 +651,16 @@ async function handleCountTokens(req, res) {
     const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
     if (systemPrompt || systemAppendPrompt) {
-      const configSystem = [];
+      modifiedRequest.system = [];
       if (systemPrompt) {
-        configSystem.push({ type: 'text', text: systemPrompt });
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
       }
-      const clientSystem = Array.isArray(anthropicRequest.system)
-        ? anthropicRequest.system
-        : (typeof anthropicRequest.system === 'string' ? [{ type: 'text', text: anthropicRequest.system }] : []);
-      const appendSystem = [];
       if (systemAppendPrompt) {
-        appendSystem.push({ type: 'text', text: systemAppendPrompt });
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
       }
-      modifiedRequest.system = [...configSystem, ...clientSystem, ...appendSystem];
+    } else {
+      delete modifiedRequest.system;
     }
-    // If no config prompts, keep client's original system as-is
 
     logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
 

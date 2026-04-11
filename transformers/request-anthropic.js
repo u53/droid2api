@@ -23,16 +23,11 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Extract client system messages and transform other messages
-  const clientSystemTexts = [];
+  // Skip client system messages and transform other messages
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
+      // Always ignore client-provided system messages for Anthropic forwarding
       if (msg.role === 'system') {
-        // Collect client system messages instead of discarding them
-        const text = typeof msg.content === 'string'
-          ? msg.content
-          : (Array.isArray(msg.content) ? msg.content.map(p => p.text || '').join('') : '');
-        if (text) clientSystemTexts.push(text);
         continue;
       }
 
@@ -68,21 +63,23 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // Merge config system prompts with client system messages
+  // Always use the configured system prompt(s) for Anthropic forwarding
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
-  const systemBlocks = [];
-  if (systemPrompt) {
-    systemBlocks.push({ type: 'text', text: systemPrompt });
-  }
-  for (const text of clientSystemTexts) {
-    systemBlocks.push({ type: 'text', text: text });
-  }
-  if (systemAppendPrompt) {
-    systemBlocks.push({ type: 'text', text: systemAppendPrompt });
-  }
-  if (systemBlocks.length > 0) {
-    anthropicRequest.system = systemBlocks;
+  if (systemPrompt || systemAppendPrompt) {
+    anthropicRequest.system = [];
+    if (systemPrompt) {
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemPrompt
+      });
+    }
+    if (systemAppendPrompt) {
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemAppendPrompt
+      });
+    }
   }
 
   // Transform tools if present
