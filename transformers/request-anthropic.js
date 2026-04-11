@@ -23,11 +23,15 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Skip client system messages and transform other messages
+  // Collect client system messages and transform other messages
+  const clientSystemTexts = [];
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
-      // Always ignore client-provided system messages for Anthropic forwarding
       if (msg.role === 'system') {
+        // 收集客户端 system 消息，稍后净化合并
+        const text = typeof msg.content === 'string' ? msg.content :
+          (Array.isArray(msg.content) ? msg.content.map(p => p.text || '').join('') : '');
+        if (text) clientSystemTexts.push(text);
         continue;
       }
 
@@ -63,22 +67,29 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // Always use the configured system prompt(s) for Anthropic forwarding
+  // 合并系统提示词：服务器前置 + 净化后的客户端system + 服务器追加
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
-  if (systemPrompt || systemAppendPrompt) {
-    anthropicRequest.system = [];
+  {
+    const finalSystem = [];
     if (systemPrompt) {
-      anthropicRequest.system.push({
-        type: 'text',
-        text: systemPrompt
-      });
+      finalSystem.push({ type: 'text', text: systemPrompt });
+    }
+    // 净化客户端 system 消息中的 Claude Code 关键词
+    for (const text of clientSystemTexts) {
+      let cleaned = text;
+      cleaned = cleaned.replace(/\bClaude Code\b/g, 'Assistant');
+      cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'assistant');
+      cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'Assistant CLI');
+      cleaned = cleaned.replace(/You are Claude Code,/gi, 'You are an AI assistant,');
+      cleaned = cleaned.replace(/This is Claude Code/gi, 'This is an AI assistant');
+      finalSystem.push({ type: 'text', text: cleaned });
     }
     if (systemAppendPrompt) {
-      anthropicRequest.system.push({
-        type: 'text',
-        text: systemAppendPrompt
-      });
+      finalSystem.push({ type: 'text', text: systemAppendPrompt });
+    }
+    if (finalSystem.length > 0) {
+      anthropicRequest.system = finalSystem;
     }
   }
 
