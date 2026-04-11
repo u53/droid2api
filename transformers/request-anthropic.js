@@ -140,6 +140,13 @@ export function transformToAnthropic(openaiRequest) {
   return anthropicRequest;
 }
 
+function isAllowedAnthropicBeta(betaValue) {
+  return betaValue !== 'claude-code-20250219'
+    && !betaValue.startsWith('context-1m-')
+    && !betaValue.startsWith('adaptive-thinking-')
+    && !betaValue.startsWith('effort-');
+}
+
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
@@ -162,14 +169,15 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
   // Handle anthropic-beta header based on reasoning configuration
   const reasoningLevel = modelId ? getModelReasoning(modelId) : null;
   let betaValues = [];
-
-  // 完整透传客户端 anthropic-beta，不做过滤
+  
+  // Add existing beta values from client headers
   if (clientHeaders['anthropic-beta']) {
     const existingBeta = clientHeaders['anthropic-beta'];
     betaValues = existingBeta
       .split(',')
       .map(v => v.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter(isAllowedAnthropicBeta);
   }
   
   // Handle thinking beta based on reasoning configuration
