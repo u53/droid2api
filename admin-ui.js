@@ -250,7 +250,7 @@ export function getDashboardPage() {
     }
     .badge-active { background: rgba(34,197,94,0.15); color: #22c55e; }
     .badge-error { background: rgba(239,68,68,0.15); color: #ef4444; }
-    .badge-forbidden { background: rgba(244,63,94,0.18); color: #fb7185; }
+
     .badge-exhausted { background: rgba(249,115,22,0.15); color: #f97316; }
     .badge-checking { background: rgba(99,102,241,0.15); color: #818cf8; }
     .badge-cooldown { background: rgba(234,179,8,0.15); color: #eab308; font-size: 11px; }
@@ -583,7 +583,6 @@ export function getDashboardPage() {
         const statusMap = {
           active: '<span class="badge badge-active">活跃</span>',
           error: '<span class="badge badge-error" title="' + esc(a.error_message || '') + '">异常</span>',
-          forbidden: '<span class="badge badge-forbidden" title="' + esc(a.error_message || '') + '">封禁</span>',
           exhausted: '<span class="badge badge-exhausted" title="' + esc(a.error_message || '') + '">额度耗尽</span>',
           checking: '<span class="badge badge-checking">验证中</span>',
           disabled: '<span class="badge badge-disabled">已禁用</span>'
@@ -612,6 +611,7 @@ export function getDashboardPage() {
               ? '<button class="btn btn-secondary btn-sm" onclick="toggleStatus(\\'' + a.id + '\\', \\'disabled\\')">禁用</button>'
               : '<button class="btn btn-secondary btn-sm" onclick="toggleStatus(\\'' + a.id + '\\', \\'active\\')">启用</button>') +
             '<button class="btn btn-danger btn-sm" onclick="deleteAccount(\\'' + a.id + '\\')">删除</button>' +
+          '<button class="btn btn-secondary btn-sm" onclick="copyAuthJson(\\'' + a.id + '\\')">复制JSON</button>' +
           '</div></td>' +
         '</tr>';
       }).join('');
@@ -808,6 +808,17 @@ export function getDashboardPage() {
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
       finally { btn.disabled = false; }
+    }
+
+    async function copyAuthJson(id) {
+      try {
+        const data = await api('GET', '/admin/api/accounts/' + id + '/auth-json');
+        const json = JSON.stringify(data.authJson, null, 2);
+        await navigator.clipboard.writeText(json);
+        toast('auth.json 已复制到剪贴板');
+      } catch (e) {
+        toast(e.message, 'error');
+      }
     }
 
     async function logout() {

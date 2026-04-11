@@ -18,7 +18,8 @@ import {
   checkAllBalances,
   refreshTokenById,
   refreshAllTokens,
-  getSystemStatus
+  getSystemStatus,
+  getAccountAuthJson
 } from './account-manager.js';
 import { getLoginPage, getDashboardPage } from './admin-ui.js';
 import { logError } from './logger.js';
@@ -189,6 +190,17 @@ adminRouter.post('/admin/api/refresh-all-tokens', requireAuth, async (req, res) 
   } catch (error) {
     logError('Refresh all tokens error', error);
     res.status(500).json({ error: 'Error', message: error.message });
+  }
+});
+
+// Get account auth.json for copy/export
+adminRouter.get('/admin/api/accounts/:id/auth-json', requireAuth, (req, res) => {
+  try {
+    const authJson = getAccountAuthJson(req.params.id);
+    res.json({ success: true, authJson });
+  } catch (error) {
+    logError('Get auth json error', error);
+    res.status(404).json({ error: 'Not Found', message: error.message });
   }
 });
 

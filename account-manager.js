@@ -18,11 +18,66 @@ let backgroundTimers = [];
 
 // Cooldown: Map<accountId, { until: timestamp, reason: string, statusCode: number }>
 const cooldownMap = new Map();
-const COOLDOWN_MS = 30 * 1000; // 30 seconds
+const COOLDOWN_MS = 3 * 1000; // 3 seconds
 
 // Round-robin: track last-used timestamp per account to spread concurrent requests
 // Map<accountId, lastUsedTimestamp>
 const lastUsedMap = new Map();
+
+// ────────────────────────────────────────
+// Concurrency Control (防止竞态条件)
+// ────────────────────────────────────────
+
+// Save 防抖: 合并短时间内的多次 saveAccounts 调用为一次磁盘写入
+let saveTimer = null;
+let savePending = false;
+const SAVE_DEBOUNCE_MS = 200; // 200ms 内的多次写入合并
+
+// 批量操作互斥锁: 防止 refreshAllTokens / checkAllBalances 同时运行
+let bulkOperationLock = Promise.resolve();
+
+// 单账号操作锁: 防止同一账号同时进行 token 刷新和余额检查
+// Map<accountId, Promise>
+const accountLockMap = new Map();
+
+/**
+ * 获取批量操作锁 —— 确保同一时间只有一个批量操作在执行
+ * @param {string} operationName - 操作名称 (用于日志)
+ * @returns {Promise<Function>} release 函数，调用后释放锁
+ */
+function acquireBulkLock(operationName) {
+  let release;
+  const prev = bulkOperationLock;
+  bulkOperationLock = new Promise(resolve => { release = resolve; });
+  return prev.then(() => {
+    logDebug(`[Lock] Acquired bulk lock for: ${operationName}`);
+    return () => {
+      logDebug(`[Lock] Released bulk lock for: ${operationName}`);
+      release();
+    };
+  });
+}
+
+/**
+ * 获取单账号操作锁 —— 确保同一账号不会同时执行 token 刷新和余额检查
+ * @param {string} accountId
+ * @returns {Promise<Function>} release 函数
+ */
+function acquireAccountLock(accountId) {
+  let release;
+  const prev = accountLockMap.get(accountId) || Promise.resolve();
+  const next = new Promise(resolve => { release = resolve; });
+  accountLockMap.set(accountId, next);
+  return prev.then(() => {
+    return () => {
+      // 如果当前 promise 仍是 map 中最新的，清理掉
+      if (accountLockMap.get(accountId) === next) {
+        accountLockMap.delete(accountId);
+      }
+      release();
+    };
+  });
+}
 
 // ────────────────────────────────────────
 // Persistence
@@ -46,7 +101,10 @@ function loadAccounts() {
   }
 }
 
-function saveAccounts() {
+/**
+ * 立即写入磁盘 (内部使用)
+ */
+function saveAccountsImmediate() {
   try {
     const data = { accounts, version: dataVersion };
     fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
@@ -54,6 +112,43 @@ function saveAccounts() {
   } catch (error) {
     logError('Failed to save accounts.json', error);
   }
+}
+
+/**
+ * 防抖保存: 合并短时间内的多次写入为一次磁盘操作
+ * - 首次调用立即写入
+ * - 后续调用在 SAVE_DEBOUNCE_MS 内合并为一次
+ */
+function saveAccounts() {
+  if (!savePending) {
+    // 首次调用，立即写入
+    savePending = true;
+    saveAccountsImmediate();
+    saveTimer = setTimeout(() => {
+      savePending = false;
+      saveTimer = null;
+    }, SAVE_DEBOUNCE_MS);
+  } else {
+    // 已有 pending，重置定时器，延迟写入最新状态
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveAccountsImmediate();
+      savePending = false;
+      saveTimer = null;
+    }, SAVE_DEBOUNCE_MS);
+  }
+}
+
+/**
+ * 强制立即保存 (用于关键操作如添加/删除账号)
+ */
+function saveAccountsSync() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  savePending = false;
+  saveAccountsImmediate();
 }
 
 // ────────────────────────────────────────
@@ -166,7 +261,7 @@ export function addAccount(authData, label = '') {
   };
 
   accounts.push(account);
-  saveAccounts();
+  saveAccountsSync(); // 关键操作：立即写入，不走防抖
   logInfo(`Added auth_json account: ${account.id} (${account.email || 'no email'}), verifying...`);
   return account;
 }
@@ -204,7 +299,7 @@ export function addApiKeyAccount(apiKey, label = '') {
   };
 
   accounts.push(account);
-  saveAccounts();
+  saveAccountsSync(); // 关键操作：立即写入，不走防抖
   logInfo(`Added apikey account: ${account.id} (${account.label || 'no label'}), verifying...`);
   return account;
 }
@@ -262,7 +357,7 @@ export function removeAccount(id) {
     throw new Error(`Account not found: ${id}`);
   }
   const removed = accounts.splice(idx, 1)[0];
-  saveAccounts();
+  saveAccountsSync(); // 关键操作：立即写入，不走防抖
   logInfo(`Removed account: ${id} (${removed.email || 'no email'})`);
   return removed;
 }
@@ -277,15 +372,15 @@ export function updateAccount(id, updates) {
   }
   if (updates.label !== undefined) account.label = updates.label;
   if (updates.status !== undefined) {
-    if (!['active', 'disabled', 'error', 'exhausted', 'checking', 'forbidden'].includes(updates.status)) {
-      throw new Error('Invalid status. Must be: active, disabled, error, exhausted, checking, forbidden');
+    if (!['active', 'disabled', 'error', 'exhausted', 'checking'].includes(updates.status)) {
+      throw new Error('Invalid status. Must be: active, disabled, error, exhausted, checking');
     }
     account.status = updates.status;
     if (updates.status === 'active') {
       account.error_message = null;
     }
   }
-  saveAccounts();
+  saveAccountsSync(); // 管理员操作：立即写入
   return account;
 }
 
@@ -294,6 +389,24 @@ export function updateAccount(id, updates) {
  */
 function getAccountById(id) {
   return accounts.find(a => a.id === id) || null;
+}
+
+/**
+ * Get account auth.json content for export/copy
+ */
+export function getAccountAuthJson(id) {
+  const account = getAccountById(id);
+  if (!account) throw new Error(`Account not found: ${id}`);
+
+  if (account.type === 'apikey') {
+    return { access_token: account.access_token };
+  }
+
+  return {
+    access_token: account.access_token || '',
+    refresh_token: account.refresh_token || '',
+    exp: account.exp || 0
+  };
 }
 
 // ────────────────────────────────────────
@@ -308,24 +421,27 @@ export async function refreshAccountToken(account) {
     throw new Error('No refresh token available');
   }
 
-  logInfo(`Refreshing token for account: ${account.id} (${account.email || 'no email'})`);
-
-  const formData = new URLSearchParams();
-  formData.append('grant_type', 'refresh_token');
-  formData.append('refresh_token', account.refresh_token);
-  formData.append('client_id', CLIENT_ID);
-
-  const proxyAgentInfo = getNextProxyAgent(REFRESH_URL);
-  const fetchOptions = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: formData.toString()
-  };
-  if (proxyAgentInfo?.agent) {
-    fetchOptions.agent = proxyAgentInfo.agent;
-  }
+  // 获取单账号锁，防止同一账号同时刷新 token 和检查余额
+  const releaseAccountLock = await acquireAccountLock(account.id);
 
   try {
+    logInfo(`Refreshing token for account: ${account.id} (${account.email || 'no email'})`);
+
+    const formData = new URLSearchParams();
+    formData.append('grant_type', 'refresh_token');
+    formData.append('refresh_token', account.refresh_token);
+    formData.append('client_id', CLIENT_ID);
+
+    const proxyAgentInfo = getNextProxyAgent(REFRESH_URL);
+    const fetchOptions = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formData.toString()
+    };
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
     const response = await fetch(REFRESH_URL, fetchOptions);
     if (!response.ok) {
       const errorText = await response.text();
@@ -351,7 +467,7 @@ export async function refreshAccountToken(account) {
       account.email = data.user.email;
     }
 
-    if (account.status === 'error' || account.status === 'forbidden') {
+    if (account.status === 'error') {
       account.status = 'active';
     }
 
@@ -364,6 +480,8 @@ export async function refreshAccountToken(account) {
     saveAccounts();
     logError(`Token refresh failed for ${account.id}`, error);
     throw error;
+  } finally {
+    releaseAccountLock();
   }
 }
 
@@ -380,18 +498,27 @@ export async function refreshTokenById(id) {
  * Refresh all active account tokens
  */
 export async function refreshAllTokens() {
-  const results = [];
-  for (const account of accounts) {
-    if (account.status === 'disabled') continue;
-    if (account.type === 'apikey') continue; // API Key 账号无需刷新
-    try {
-      await refreshAccountToken(account);
-      results.push({ id: account.id, success: true });
-    } catch (error) {
-      results.push({ id: account.id, success: false, error: error.message });
+  const releaseBulkLock = await acquireBulkLock('refreshAllTokens');
+  try {
+    const results = [];
+    // 拷贝数组快照，防止迭代过程中数组被修改
+    const snapshot = [...accounts];
+    for (const account of snapshot) {
+      if (account.status === 'disabled') continue;
+      if (account.type === 'apikey') continue; // API Key 账号无需刷新
+      // 检查账号是否已被删除
+      if (!accounts.includes(account)) continue;
+      try {
+        await refreshAccountToken(account);
+        results.push({ id: account.id, success: true });
+      } catch (error) {
+        results.push({ id: account.id, success: false, error: error.message });
+      }
     }
+    return results;
+  } finally {
+    releaseBulkLock();
   }
-  return results;
 }
 
 // ────────────────────────────────────────
@@ -406,21 +533,24 @@ export async function checkAccountBalance(account) {
     throw new Error('No access token available, refresh token first');
   }
 
-  logDebug(`Checking balance for: ${account.id}`);
-
-  const proxyAgentInfo = getNextProxyAgent(BALANCE_URL);
-  const fetchOptions = {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${account.access_token}`,
-      'Accept': 'application/json'
-    }
-  };
-  if (proxyAgentInfo?.agent) {
-    fetchOptions.agent = proxyAgentInfo.agent;
-  }
+  // 获取单账号锁，防止同一账号同时刷新 token 和检查余额
+  const releaseAccountLock = await acquireAccountLock(account.id);
 
   try {
+    logDebug(`Checking balance for: ${account.id}`);
+
+    const proxyAgentInfo = getNextProxyAgent(BALANCE_URL);
+    const fetchOptions = {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${account.access_token}`,
+        'Accept': 'application/json'
+      }
+    };
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
     const response = await fetch(BALANCE_URL, fetchOptions);
     if (!response.ok) {
       const errorText = await response.text();
@@ -462,6 +592,8 @@ export async function checkAccountBalance(account) {
   } catch (error) {
     logError(`Balance check failed for ${account.id}`, error);
     throw error;
+  } finally {
+    releaseAccountLock();
   }
 }
 
@@ -487,18 +619,27 @@ export async function checkBalanceById(id) {
  * Check all active account balances
  */
 export async function checkAllBalances() {
-  const results = [];
-  for (const account of accounts) {
-    if (account.status === 'disabled') continue;
-    if (!account.access_token) continue;
-    try {
-      const balance = await checkAccountBalance(account);
-      results.push({ id: account.id, success: true, balance });
-    } catch (error) {
-      results.push({ id: account.id, success: false, error: error.message });
+  const releaseBulkLock = await acquireBulkLock('checkAllBalances');
+  try {
+    const results = [];
+    // 拷贝数组快照，防止迭代过程中数组被修改
+    const snapshot = [...accounts];
+    for (const account of snapshot) {
+      if (account.status === 'disabled') continue;
+      if (!account.access_token) continue;
+      // 检查账号是否已被删除
+      if (!accounts.includes(account)) continue;
+      try {
+        const balance = await checkAccountBalance(account);
+        results.push({ id: account.id, success: true, balance });
+      } catch (error) {
+        results.push({ id: account.id, success: false, error: error.message });
+      }
     }
+    return results;
+  } finally {
+    releaseBulkLock();
   }
-  return results;
 }
 
 // ────────────────────────────────────────
@@ -533,19 +674,11 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
 
   const trimmedReason = (reason || '').substring(0, 200);
 
-  if (statusCode === 403 && /forbidden/i.test(reason || '')) {
-    account.status = 'forbidden';
-    account.error_message = `生成接口被上游拒绝 (403 Forbidden): ${trimmedReason}`;
-    cooldownMap.delete(account.id);
-    saveAccounts();
-    logInfo(`[Forbidden] Account ${account.id} (${account.email || account.label || 'unknown'}) marked as forbidden`);
-    return;
-  }
-
+  // 403 不再视为封禁，统一走冷却逻辑，调度器会自动尝试下一个账号
   const reasonMap = {
     401: '认证失败 (401)',
     402: '额度不足 (402)',
-    403: '权限不足 (403)',
+    403: '请求被拒绝 (403)',
     429: '请求频率过高 (429)'
   };
 
@@ -558,7 +691,7 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
     statusCode
   });
 
-  logInfo(`[Cooldown] Account ${account.id} (${account.email || account.label || 'unknown'}) paused 30s: ${displayReason}`);
+  logInfo(`[Cooldown] Account ${account.id} (${account.email || account.label || 'unknown'}) paused 3s: ${displayReason}`);
 }
 
 // ────────────────────────────────────────
@@ -678,24 +811,31 @@ export async function getNextApiKey(excludeTokens = []) {
  * Background: refresh tokens that are about to expire (< 2 hours remaining)
  */
 async function backgroundRefreshTokens() {
-  const now = Date.now();
-  const twoHoursMs = 2 * 60 * 60 * 1000;
+  const releaseBulkLock = await acquireBulkLock('backgroundRefreshTokens');
+  try {
+    const now = Date.now();
+    const twoHoursMs = 2 * 60 * 60 * 1000;
 
-  for (const account of accounts) {
-    if (account.status !== 'active') continue;
-    if (account.type === 'apikey') continue; // API Key 账号无需刷新
-    if (!account.refresh_token) continue;
+    const snapshot = [...accounts];
+    for (const account of snapshot) {
+      if (account.status !== 'active') continue;
+      if (account.type === 'apikey') continue; // API Key 账号无需刷新
+      if (!account.refresh_token) continue;
+      if (!accounts.includes(account)) continue;
 
-    const tokenExpiringSoon = account.exp && (account.exp - now) < twoHoursMs;
-    const neverRefreshed = !account.last_refresh;
+      const tokenExpiringSoon = account.exp && (account.exp - now) < twoHoursMs;
+      const neverRefreshed = !account.last_refresh;
 
-    if (tokenExpiringSoon || neverRefreshed) {
-      try {
-        await refreshAccountToken(account);
-      } catch (error) {
-        logError(`Background refresh failed for ${account.id}`, error);
+      if (tokenExpiringSoon || neverRefreshed) {
+        try {
+          await refreshAccountToken(account);
+        } catch (error) {
+          logError(`Background refresh failed for ${account.id}`, error);
+        }
       }
     }
+  } finally {
+    releaseBulkLock();
   }
 }
 
@@ -704,22 +844,29 @@ async function backgroundRefreshTokens() {
  * This allows exhausted/error accounts to auto-recover
  */
 async function backgroundCheckBalances() {
-  for (const account of accounts) {
-    if (account.status === 'disabled' || account.status === 'checking') continue;
-    if (!account.access_token) continue;
-    try {
-      const prevStatus = account.status;
-      await checkAccountBalance(account);
-      // Auto-recover error accounts on successful balance check
-      if (prevStatus === 'error' && account.status !== 'exhausted') {
-        account.status = 'active';
-        account.error_message = null;
-        saveAccounts();
-        logInfo(`Account ${account.id} auto-recovered to active`);
+  const releaseBulkLock = await acquireBulkLock('backgroundCheckBalances');
+  try {
+    const snapshot = [...accounts];
+    for (const account of snapshot) {
+      if (account.status === 'disabled' || account.status === 'checking') continue;
+      if (!account.access_token) continue;
+      if (!accounts.includes(account)) continue;
+      try {
+        const prevStatus = account.status;
+        await checkAccountBalance(account);
+        // Auto-recover error accounts on successful balance check
+        if (prevStatus === 'error' && account.status !== 'exhausted') {
+          account.status = 'active';
+          account.error_message = null;
+          saveAccounts();
+          logInfo(`Account ${account.id} auto-recovered to active`);
+        }
+      } catch (error) {
+        logError(`Background balance check failed for ${account.id}`, error);
       }
-    } catch (error) {
-      logError(`Background balance check failed for ${account.id}`, error);
     }
+  } finally {
+    releaseBulkLock();
   }
 }
 
@@ -757,6 +904,13 @@ export function stopBackgroundTasks() {
     clearInterval(timer);
   }
   backgroundTimers = [];
+  // 停止时强制刷盘，确保所有 pending 的改动不丢失
+  if (savePending && saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    savePending = false;
+    saveAccountsImmediate();
+  }
   logInfo('Background tasks stopped');
 }
 
@@ -767,8 +921,7 @@ export function stopBackgroundTasks() {
 export function getSystemStatus() {
   const total = accounts.length;
   const active = accounts.filter(a => a.status === 'active').length;
-  const forbidden = accounts.filter(a => a.status === 'forbidden').length;
-  const error = accounts.filter(a => a.status === 'error').length + forbidden;
+  const error = accounts.filter(a => a.status === 'error').length;
   const disabled = accounts.filter(a => a.status === 'disabled').length;
   const exhausted = accounts.filter(a => a.status === 'exhausted').length;
   const checking = accounts.filter(a => a.status === 'checking').length;
@@ -780,7 +933,6 @@ export function getSystemStatus() {
     disabled,
     exhausted,
     checking,
-    forbidden,
     backgroundTasksRunning: backgroundTimers.length > 0
   };
 }
