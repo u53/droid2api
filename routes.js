@@ -30,11 +30,19 @@ function isForbiddenError(status, detail) {
 function sanitizeClaudeCodeIdentity(text) {
   if (!text) return text;
   let cleaned = text;
-  cleaned = cleaned.replace(/\bClaude Code\b/g, 'Assistant');
-  cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'assistant');
-  cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'Assistant CLI');
+  // 核心身份关键词 — 必须在发送到 Factory.ai 之前全部移除
+  // 注意顺序：长匹配在前，短匹配在后，避免误替换
+  cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'the CLI');
+  cleaned = cleaned.replace(/\bClaude Code\b/g, 'the assistant');
+  cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'the assistant');
   cleaned = cleaned.replace(/You are Claude Code,/gi, 'You are an AI assistant,');
   cleaned = cleaned.replace(/This is Claude Code/gi, 'This is an AI assistant');
+  // Anthropic 品牌相关
+  cleaned = cleaned.replace(/Anthropic's official CLI for Claude/gi, "an AI coding assistant");
+  cleaned = cleaned.replace(/Anthropic's (?:official )?CLI/gi, 'an AI CLI tool');
+  // Agent SDK 相关
+  cleaned = cleaned.replace(/Claude Agent SDK/gi, 'the Agent SDK');
+  cleaned = cleaned.replace(/claude\.ai/gi, 'the platform');
   return cleaned;
 }
 

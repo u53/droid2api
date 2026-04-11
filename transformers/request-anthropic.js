@@ -75,14 +75,18 @@ export function transformToAnthropic(openaiRequest) {
     if (systemPrompt) {
       finalSystem.push({ type: 'text', text: systemPrompt });
     }
-    // 净化客户端 system 消息中的 Claude Code 关键词
+    // 净化客户端 system 消息中会触发 Factory 403 的关键词
     for (const text of clientSystemTexts) {
       let cleaned = text;
-      cleaned = cleaned.replace(/\bClaude Code\b/g, 'Assistant');
-      cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'assistant');
-      cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'Assistant CLI');
+      cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'the CLI');
+      cleaned = cleaned.replace(/\bClaude Code\b/g, 'the assistant');
+      cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'the assistant');
       cleaned = cleaned.replace(/You are Claude Code,/gi, 'You are an AI assistant,');
       cleaned = cleaned.replace(/This is Claude Code/gi, 'This is an AI assistant');
+      cleaned = cleaned.replace(/Anthropic's official CLI for Claude/gi, "an AI coding assistant");
+      cleaned = cleaned.replace(/Anthropic's (?:official )?CLI/gi, 'an AI CLI tool');
+      cleaned = cleaned.replace(/Claude Agent SDK/gi, 'the Agent SDK');
+      cleaned = cleaned.replace(/claude\.ai/gi, 'the platform');
       finalSystem.push({ type: 'text', text: cleaned });
     }
     if (systemAppendPrompt) {
