@@ -23,9 +23,10 @@ export function transformToAnthropic(openaiRequest) {
     anthropicRequest.max_tokens = 4096;
   }
 
-  // Skip client system messages (Claude Code system prompt template triggers Factory 403)
+  // Skip client system messages and transform other messages
   if (openaiRequest.messages && Array.isArray(openaiRequest.messages)) {
     for (const msg of openaiRequest.messages) {
+      // Always ignore client-provided system messages for Anthropic forwarding
       if (msg.role === 'system') {
         continue;
       }
@@ -62,19 +63,22 @@ export function transformToAnthropic(openaiRequest) {
     }
   }
 
-  // 只使用服务器配置的 system prompt（客户端的已丢弃）
+  // Always use the configured system prompt(s) for Anthropic forwarding
   const systemPrompt = getSystemPrompt();
   const systemAppendPrompt = getSystemAppendPrompt();
-  {
-    const finalSystem = [];
+  if (systemPrompt || systemAppendPrompt) {
+    anthropicRequest.system = [];
     if (systemPrompt) {
-      finalSystem.push({ type: 'text', text: systemPrompt });
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemPrompt
+      });
     }
     if (systemAppendPrompt) {
-      finalSystem.push({ type: 'text', text: systemAppendPrompt });
-    }
-    if (finalSystem.length > 0) {
-      anthropicRequest.system = finalSystem;
+      anthropicRequest.system.push({
+        type: 'text',
+        text: systemAppendPrompt
+      });
     }
   }
 
@@ -140,9 +144,7 @@ function isAllowedAnthropicBeta(betaValue) {
   return betaValue !== 'claude-code-20250219'
     && !betaValue.startsWith('context-1m-')
     && !betaValue.startsWith('adaptive-thinking-')
-    && !betaValue.startsWith('effort-')
-    && !betaValue.startsWith('oauth-')
-    && !betaValue.startsWith('fine-grained-tool-streaming-');
+    && !betaValue.startsWith('effort-');
 }
 
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {

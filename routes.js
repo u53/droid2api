@@ -23,52 +23,6 @@ function isForbiddenError(status, detail) {
 }
 
 /**
- * 净化系统提示词中的 Claude Code 身份关键词
- * 防止上游 Factory.ai 检测到 Claude Code 特征返回 403
- * 同时保留工具定义、能力描述等有用内容
- */
-function sanitizeClaudeCodeIdentity(text) {
-  if (!text) return text;
-  let cleaned = text;
-  // 核心身份关键词 — 必须在发送到 Factory.ai 之前全部移除
-  // 注意顺序：长匹配在前，短匹配在后，避免误替换
-  cleaned = cleaned.replace(/\bClaude Code CLI\b/gi, 'the CLI');
-  cleaned = cleaned.replace(/\bClaude Code\b/g, 'the assistant');
-  cleaned = cleaned.replace(/\bclaude[_-]code\b/gi, 'the assistant');
-  cleaned = cleaned.replace(/You are Claude Code,/gi, 'You are an AI assistant,');
-  cleaned = cleaned.replace(/This is Claude Code/gi, 'This is an AI assistant');
-  // Anthropic 品牌相关
-  cleaned = cleaned.replace(/Anthropic's official CLI for Claude/gi, "an AI coding assistant");
-  cleaned = cleaned.replace(/Anthropic's (?:official )?CLI/gi, 'an AI CLI tool');
-  cleaned = cleaned.replace(/\bAnthropic\b/g, 'the developer');
-  // Agent SDK 相关
-  cleaned = cleaned.replace(/Claude Agent SDK/gi, 'the Agent SDK');
-  cleaned = cleaned.replace(/claude\.ai/gi, 'the platform');
-  return cleaned;
-}
-
-/**
- * 构建发送给上游的 system prompt
- * 策略：完全丢弃客户端的 system prompt（避免 Claude Code 模板指纹触发 Factory 403）
- * 只使用服务器配置的 system_prompt 和 system_append_prompt
- */
-function buildMergedSystemPrompt(clientSystem) {
-  const systemPrompt = getSystemPrompt();
-  const systemAppendPrompt = getSystemAppendPrompt();
-
-  const finalSystem = [];
-  if (systemPrompt) {
-    finalSystem.push({ type: 'text', text: systemPrompt });
-  }
-  // 客户端 system prompt 完全不保留 — Factory.ai 会对其结构做模式匹配
-  if (systemAppendPrompt) {
-    finalSystem.push({ type: 'text', text: systemAppendPrompt });
-  }
-
-  return finalSystem.length > 0 ? finalSystem : null;
-}
-
-/**
  * Convert a /v1/responses API result to a /v1/chat/completions-compatible format.
  * Works for non-streaming responses.
  */
@@ -547,37 +501,17 @@ async function handleDirectMessages(req, res) {
     const useRetry = hasAccounts();
 
     // Build modified request (once)
+    const systemPrompt = getSystemPrompt();
+    const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
-
-    // 清除 Claude Code 客户端指纹（device_id, account_uuid 等）
-    delete modifiedRequest.metadata;
-
-    // 净化 messages 中的 Claude Code 关键词（避免 Factory 扫描 body 触发 403）
-    if (modifiedRequest.messages && Array.isArray(modifiedRequest.messages)) {
-      modifiedRequest.messages = modifiedRequest.messages.map(msg => {
-        if (!msg.content) return msg;
-        if (typeof msg.content === 'string') {
-          return { ...msg, content: sanitizeClaudeCodeIdentity(msg.content) };
-        }
-        if (Array.isArray(msg.content)) {
-          return {
-            ...msg,
-            content: msg.content.map(block => {
-              if (block.type === 'text' && block.text) {
-                return { ...block, text: sanitizeClaudeCodeIdentity(block.text) };
-              }
-              return block;
-            })
-          };
-        }
-        return msg;
-      });
-    }
-
-    // 系统提示词：保留客户端原始system + 净化Claude Code关键词 + 合并服务器prompt
-    const mergedSystem = buildMergedSystemPrompt(anthropicRequest.system);
-    if (mergedSystem) {
-      modifiedRequest.system = mergedSystem;
+    if (systemPrompt || systemAppendPrompt) {
+      modifiedRequest.system = [];
+      if (systemPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
+      }
+      if (systemAppendPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
+      }
     } else {
       delete modifiedRequest.system;
     }
@@ -713,12 +647,17 @@ async function handleCountTokens(req, res) {
     const countTokensUrl = endpoint.base_url.replace('/v1/messages', '/v1/messages/count_tokens');
     const useRetry = hasAccounts();
 
+    const systemPrompt = getSystemPrompt();
+    const systemAppendPrompt = getSystemAppendPrompt();
     const modifiedRequest = { ...anthropicRequest, model: modelId };
-
-    // 净化 + 合并 system prompt（同 handleDirectMessages 逻辑）
-    const mergedSystem = buildMergedSystemPrompt(anthropicRequest.system);
-    if (mergedSystem) {
-      modifiedRequest.system = mergedSystem;
+    if (systemPrompt || systemAppendPrompt) {
+      modifiedRequest.system = [];
+      if (systemPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemPrompt });
+      }
+      if (systemAppendPrompt) {
+        modifiedRequest.system.push({ type: 'text', text: systemAppendPrompt });
+      }
     } else {
       delete modifiedRequest.system;
     }
