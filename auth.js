@@ -246,14 +246,14 @@ export async function initializeAuth() {
     }
 
     const authConfig = loadAuthConfig();
-    
+
     if (authConfig.type === 'factory_key') {
       // Using fixed FACTORY_API_KEY, no refresh needed
       logInfo('Auth system initialized with fixed API key');
     } else if (authConfig.type === 'refresh') {
       // Using refresh token mechanism
       currentRefreshToken = authConfig.value;
-      
+
       // Always refresh on startup to get fresh token
       await refreshApiKey();
       logInfo('Auth system initialized with refresh token mechanism');
@@ -261,11 +261,17 @@ export async function initializeAuth() {
       // Using client authorization, no setup needed
       logInfo('Auth system initialized for client authorization mode');
     }
-    
+
     logInfo('Auth system initialized successfully');
   } catch (error) {
     logError('Failed to initialize auth system', error);
-    throw error;
+    currentApiKey = null;
+    currentRefreshToken = null;
+    lastRefreshTime = null;
+    authSource = 'client';
+    authFilePath = null;
+    logInfo('Falling back to client authorization mode so the server can continue starting');
+    logInfo('Auth system initialized successfully');
   }
 }
 
