@@ -8,7 +8,7 @@ import { getNextProxyAgent } from './proxy-manager.js';
 // Constants
 const ACCOUNTS_FILE = path.join(process.cwd(), 'accounts.json');
 const REFRESH_URL = 'https://api.workos.com/user_management/authenticate';
-const BALANCE_URL = 'https://app.factory.ai/api/organization/members/chat-usage';
+const BALANCE_URL = 'https://app.factory.ai/api/organization/members/chat-usage?interval=M';
 const CLIENT_ID = 'client_01HNM792M5G5G1A2THWPXKFMXB';
 
 // In-memory state
@@ -607,7 +607,7 @@ export async function checkAccountBalance(account) {
     };
 
     // Auto-set status based on usage
-    if (usedRatio >= 0.95) {
+    if (usedRatio >= 1.0) {
       if (account.status !== 'disabled') {
         account.status = 'exhausted';
         account.error_message = `额度已用完 (${(usedRatio * 100).toFixed(1)}%)`;
@@ -772,7 +772,7 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
 
       // 余额检查成功 → token 有效，账号未封禁
       // checkAccountBalance 内部已经处理了 exhausted 状态的设置
-      if (balance.usedRatio >= 0.95) {
+      if (balance.usedRatio >= 1.0) {
         logInfo(`[HealthCheck] Account ${account.id} confirmed exhausted (${(balance.usedRatio * 100).toFixed(1)}% used)`);
       } else {
         // 额度正常，说明之前的失败只是临时问题，冷却到期后自动恢复
@@ -890,10 +890,10 @@ export async function getNextApiKey(excludeTokens = []) {
   // 2. Exclude exhausted
   const available = active.filter(a => {
     if (!a.cached_balance) return true;
-    return a.cached_balance.usedRatio < 0.95;
+    return a.cached_balance.usedRatio < 1.0;
   });
   if (available.length === 0) {
-    throw new Error('所有活跃账号额度均已耗尽 (>=95%)');
+    throw new Error('所有活跃账号额度均已耗尽 (100%)');
   }
 
   // 3. Must have token or refresh token
