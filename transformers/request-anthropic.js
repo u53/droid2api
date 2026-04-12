@@ -144,7 +144,11 @@ function isAllowedAnthropicBeta(betaValue) {
   return betaValue !== 'claude-code-20250219'
     && !betaValue.startsWith('context-1m-')
     && !betaValue.startsWith('adaptive-thinking-')
-    && !betaValue.startsWith('effort-');
+    && !betaValue.startsWith('effort-')
+    && !betaValue.startsWith('context-management-')
+    && !betaValue.startsWith('advanced-tool-use-')
+    && !betaValue.startsWith('prompt-caching-scope-')
+    && !betaValue.startsWith('redact-thinking-');
 }
 
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {

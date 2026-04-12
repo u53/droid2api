@@ -521,10 +521,16 @@ async function handleDirectMessages(req, res) {
     const isStreaming = anthropicRequest.stream === true;
     const useRetry = hasAccounts();
 
-    // Build modified request (once)
+    // Build modified request (once) — strip fields that may cause upstream 403
     const systemPrompt = getSystemPrompt();
     const systemAppendPrompt = getSystemAppendPrompt();
-    const modifiedRequest = { ...anthropicRequest, model: modelId };
+    const {
+      output_config: _outputConfig,
+      context_management: _ctxMgmt,
+      metadata: _metadata,
+      ...cleanRequest
+    } = anthropicRequest;
+    const modifiedRequest = { ...cleanRequest, model: modelId };
     if (systemPrompt || systemAppendPrompt) {
       modifiedRequest.system = [];
       if (systemPrompt) {
