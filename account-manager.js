@@ -879,8 +879,8 @@ export function getActiveAccountCount() {
  * @param {string[]} excludeTokens - Bearer tokens to exclude (already tried in this request)
  *
  * Sorting priority:
- *   1. usage ratio ascending (lowest first)
- *   2. least-recently-used first (spread concurrent requests)
+ *   1. usage ratio descending (highest first — exhaust near-full accounts quickly)
+ *   2. least-recently-used first (spread concurrent requests within similar usage band)
  * Concurrency safety:
  *   - Each request carries its own excludeTokens list, so retries within one
  *     request never pick the same account twice.
@@ -888,6 +888,8 @@ export function getActiveAccountCount() {
  *     distributed across different accounts (round-robin effect).
  *   - cooldownMap is updated synchronously on failure report and immediately
  *     visible to all subsequent getNextApiKey calls (single-threaded Node.js).
+ *   - Exhausted accounts are auto-removed by asyncAccountHealthCheck and
+ *     backgroundCheckBalances, keeping the account pool clean.
  */
 export async function getNextApiKey(excludeTokens = []) {
   const excludeSet = new Set(excludeTokens.map(t => t.replace(/^Bearer\s+/i, '')));
@@ -923,7 +925,8 @@ export async function getNextApiKey(excludeTokens = []) {
     throw new Error('No usable accounts (missing token)');
   }
 
-  // 4. Sort: primary by usage ratio asc, secondary by least-recently-used
+  // 4. Sort: primary by usage ratio desc (exhaust near-full accounts first),
+  //    secondary by least-recently-used (spread concurrent requests)
   usable.sort((a, b) => {
     const ratioA = a.cached_balance?.usedRatio ?? 0;
     const ratioB = b.cached_balance?.usedRatio ?? 0;
@@ -933,7 +936,7 @@ export async function getNextApiKey(excludeTokens = []) {
       const luB = lastUsedMap.get(b.id) || 0;
       return luA - luB; // smaller timestamp = used longer ago = preferred
     }
-    return ratioA - ratioB;
+    return ratioB - ratioA; // higher usage first — exhaust and clean up
   });
 
   // 5. Try accounts in order
