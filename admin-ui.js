@@ -670,8 +670,26 @@ export function getDashboardPage() {
         // Replace hint with filename
         const hint = area.querySelector('.hint');
         if (hint) hint.innerHTML = '<span class="filename">' + esc(file.name) + '</span> 已选择';
+        tryAutoSubmit();
       };
       reader.readAsText(file);
+    }
+
+    function tryAutoSubmit() {
+      if (currentAddTab === 'auth_json') {
+        const raw = document.getElementById('authJsonInput').value.trim();
+        if (!raw) return;
+        try { JSON.parse(raw); } catch { toast('JSON 格式无效，请检查文件内容', 'error'); return; }
+        toast('正在添加账号...');
+        addAccount();
+      } else if (currentAddTab === 'auth_v2') {
+        const v2File = document.getElementById('v2FileInput').value.trim();
+        const v2Key = document.getElementById('v2KeyInput').value.trim();
+        if (!v2File || !v2Key) return;
+        toast('正在添加账号...');
+        addAccount();
+      }
+      // apikey tab: no auto-submit
     }
 
     function resetFileArea(areaId, hintText) {
