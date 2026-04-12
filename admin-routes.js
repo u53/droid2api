@@ -94,14 +94,14 @@ adminRouter.post('/admin/api/accounts', requireAuth, async (req, res) => {
     } else if (type === 'auth_v2') {
       // Decrypt auth.v2 files then create account
       if (!v2File || !v2Key) {
-        return res.status(400).json({ error: 'Bad Request', message: 'Please provide auth.v2.file and auth.v2.key content' });
+        return res.status(400).json({ error: 'Bad Request', message: '请提供 auth.v2.file 和 auth.v2.key 的内容' });
       }
       const decrypted = decryptAuthV2(v2File, v2Key);
       account = addAccount(decrypted, label);
     } else {
       // auth_json (default)
       if (!authData || typeof authData !== 'object') {
-        return res.status(400).json({ error: 'Bad Request', message: 'Please provide auth.json content' });
+        return res.status(400).json({ error: 'Bad Request', message: '请提供 auth.json 内容' });
       }
       account = addAccount(authData, label);
     }
