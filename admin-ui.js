@@ -450,6 +450,7 @@ export function getDashboardPage() {
       <div class="modal-tabs">
         <button class="modal-tab active" data-tab="auth_json">auth.json</button>
         <button class="modal-tab" data-tab="auth_v2">auth.v2</button>
+        <button class="modal-tab" data-tab="rttoken">RT Token</button>
         <button class="modal-tab" data-tab="apikey">API Key</button>
       </div>
 
@@ -485,6 +486,14 @@ export function getDashboardPage() {
           </div>
           <div class="input-divider">或手动粘贴</div>
           <input type="text" id="v2KeyInput" placeholder="Base64 编码的密钥">
+        </div>
+      </div>
+
+      <!-- RT Token tab -->
+      <div class="tab-pane" id="tabRtToken">
+        <div class="form-group">
+          <label>Refresh Token</label>
+          <input type="text" id="rtTokenInput" placeholder="直接粘贴 RT Token，例如 jOlrZrFzVMGLOsIFhoBKhANK1">
         </div>
       </div>
 
@@ -653,7 +662,7 @@ export function getDashboardPage() {
         document.querySelectorAll('.modal-tab').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
         btn.classList.add('active');
-        const paneMap = { auth_json: 'tabAuthJson', auth_v2: 'tabAuthV2', apikey: 'tabApiKey' };
+        const paneMap = { auth_json: 'tabAuthJson', auth_v2: 'tabAuthV2', rttoken: 'tabRtToken', apikey: 'tabApiKey' };
         document.getElementById(paneMap[tab]).classList.add('active');
       });
     });
@@ -708,6 +717,7 @@ export function getDashboardPage() {
       document.getElementById('authJsonInput').value = '';
       document.getElementById('v2FileInput').value = '';
       document.getElementById('v2KeyInput').value = '';
+      document.getElementById('rtTokenInput').value = '';
       document.getElementById('apiKeyInput').value = '';
       document.getElementById('labelInput').value = '';
       resetFileArea('authJsonFileArea', '点击或拖拽上传 auth.json');
@@ -736,6 +746,10 @@ export function getDashboardPage() {
           const apiKey = document.getElementById('apiKeyInput').value.trim();
           if (!apiKey) throw new Error('请输入 API Key');
           body = { type: 'apikey', apiKey, label };
+        } else if (currentAddTab === 'rttoken') {
+          const rtToken = document.getElementById('rtTokenInput').value.trim();
+          if (!rtToken) throw new Error('请输入 RT Token');
+          body = { type: 'auth_json', authData: { refresh_token: rtToken }, label };
         } else if (currentAddTab === 'auth_v2') {
           const v2File = document.getElementById('v2FileInput').value.trim();
           const v2Key = document.getElementById('v2KeyInput').value.trim();
