@@ -11,12 +11,15 @@ import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { GoogleResponseTransformer } from './transformers/response-google.js';
 import { getApiKey, reportApiKeyFailure } from './auth.js';
 import { hasAccounts, getActiveAccountCount } from './account-manager.js';
-import { getNextProxyAgent } from './proxy-manager.js';
+import { getNextProxyAgent, reportProxyFailure } from './proxy-manager.js';
 
 const router = express.Router();
 
 // Status codes that trigger account rotation retry
 const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
+
+// Status codes that indicate proxy-level failures
+const PROXY_ERROR_STATUSES = new Set([502, 503, 504]);
 
 function isForbiddenError(status, detail) {
   return status === 403 && /forbidden/i.test(detail || '');
@@ -131,7 +134,7 @@ router.get('/v1/models', (req, res) => {
   }
 });
 
-// 标准 OpenAI 聊天补全处理函数（带格式转换）
+// Standard OpenAI chat completion handler (with format conversion)
 async function handleChatCompletions(req, res) {
   logInfo('POST /v1/chat/completions');
 
@@ -210,8 +213,17 @@ async function handleChatCompletions(req, res) {
       const fetchOptions = { method: 'POST', headers, body: JSON.stringify(transformedRequest) };
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-      response = await fetch(endpoint.base_url, fetchOptions);
+      try {
+        response = await fetch(endpoint.base_url, fetchOptions);
+      } catch (networkError) {
+        if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
+        throw networkError;
+      }
       logInfo(`Response status: ${response.status}`);
+
+      if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
+        reportProxyFailure(proxyAgentInfo.proxy.url);
+      }
 
       if (response.ok) break; // Success
 
@@ -249,7 +261,7 @@ async function handleChatCompletions(req, res) {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      // common 类型直接转发，不使用 transformer
+      // Common type: forward directly without transformer
       if (model.type === 'common') {
         try {
           for await (const chunk of response.body) {
@@ -262,7 +274,7 @@ async function handleChatCompletions(req, res) {
           res.end();
         }
       } else {
-        // anthropic 和 openai 类型使用 transformer
+        // Anthropic, OpenAI, and Google types use transformer
         let transformer;
         if (model.type === 'anthropic') {
           transformer = new AnthropicResponseTransformer(modelId, `chatcmpl-${Date.now()}`);
@@ -304,7 +316,7 @@ async function handleChatCompletions(req, res) {
           res.json(data);
         }
       } else {
-        // anthropic/common: 保持现有逻辑，直接转发
+        // anthropic/common: forward directly
         logResponse(200, null, data);
         res.json(data);
       }
@@ -319,7 +331,7 @@ async function handleChatCompletions(req, res) {
   }
 }
 
-// 直接转发 OpenAI 请求（不做格式转换）
+// Direct forward OpenAI request (no format conversion)
 async function handleDirectResponses(req, res) {
   logInfo('POST /v1/responses');
 
@@ -338,11 +350,11 @@ async function handleDirectResponses(req, res) {
 
     logInfo(`Model: ${modelId}`);
 
-    // 只允许 openai 类型端点
+    // Only allow openai endpoint type
     if (model.type !== 'openai') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid endpoint type',
-        message: `/v1/responses 接口只支持 openai 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+        message: `/v1/responses only supports openai endpoint type, model ${modelId} is ${model.type} type`
       });
     }
 
@@ -396,8 +408,17 @@ async function handleDirectResponses(req, res) {
       const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-      response = await fetch(endpoint.base_url, fetchOptions);
+      try {
+        response = await fetch(endpoint.base_url, fetchOptions);
+      } catch (networkError) {
+        if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
+        throw networkError;
+      }
       logInfo(`Response status: ${response.status}`);
+
+      if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
+        reportProxyFailure(proxyAgentInfo.proxy.url);
+      }
 
       if (response.ok) break;
 
@@ -428,13 +449,13 @@ async function handleDirectResponses(req, res) {
     const isStreaming = openaiRequest.stream === true;
 
     if (isStreaming) {
-      // 直接转发流式响应，不做任何转换
+      // Forward streaming response directly
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        // 直接将原始响应流转发给客户端
+        // Forward raw response stream to client
         for await (const chunk of response.body) {
           res.write(chunk);
         }
@@ -445,7 +466,7 @@ async function handleDirectResponses(req, res) {
         res.end();
       }
     } else {
-      // 直接转发非流式响应，不做任何转换
+      // Forward non-streaming response directly
       const data = await response.json();
       logResponse(200, null, data);
       res.json(data);
@@ -460,7 +481,7 @@ async function handleDirectResponses(req, res) {
   }
 }
 
-// 直接转发 Anthropic 请求（不做格式转换）
+// Direct forward Anthropic request (no format conversion)
 async function handleDirectMessages(req, res) {
   logInfo('POST /v1/messages');
 
@@ -479,11 +500,11 @@ async function handleDirectMessages(req, res) {
 
     logInfo(`Model: ${modelId}`);
 
-    // 只允许 anthropic 类型端点
+    // Only allow anthropic endpoint type
     if (model.type !== 'anthropic') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid endpoint type',
-        message: `/v1/messages 接口只支持 anthropic 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+        message: `/v1/messages only supports anthropic endpoint type, model ${modelId} is ${model.type} type`
       });
     }
 
@@ -547,8 +568,17 @@ async function handleDirectMessages(req, res) {
       const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-      response = await fetch(endpoint.base_url, fetchOptions);
+      try {
+        response = await fetch(endpoint.base_url, fetchOptions);
+      } catch (networkError) {
+        if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
+        throw networkError;
+      }
       logInfo(`Response status: ${response.status}`);
+
+      if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
+        reportProxyFailure(proxyAgentInfo.proxy.url);
+      }
 
       if (response.ok) break;
 
@@ -577,13 +607,13 @@ async function handleDirectMessages(req, res) {
     }
 
     if (isStreaming) {
-      // 直接转发流式响应，不做任何转换
+      // Forward streaming response directly
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        // 直接将原始响应流转发给客户端
+        // Forward raw response stream to client
         for await (const chunk of response.body) {
           res.write(chunk);
         }
@@ -594,7 +624,7 @@ async function handleDirectMessages(req, res) {
         res.end();
       }
     } else {
-      // 直接转发非流式响应，不做任何转换
+      // Forward non-streaming response directly
       const data = await response.json();
       logResponse(200, null, data);
       res.json(data);
@@ -609,7 +639,7 @@ async function handleDirectMessages(req, res) {
   }
 }
 
-// 处理 Anthropic count_tokens 请求
+// Handle Anthropic count_tokens request
 async function handleCountTokens(req, res) {
   logInfo('POST /v1/messages/count_tokens');
 
@@ -628,11 +658,11 @@ async function handleCountTokens(req, res) {
 
     logInfo(`Model: ${modelId}`);
 
-    // 只允许 anthropic 类型端点
+    // Only allow anthropic endpoint type
     if (model.type !== 'anthropic') {
       return res.status(400).json({
         error: 'Invalid endpoint type',
-        message: `/v1/messages/count_tokens 接口只支持 anthropic 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+        message: `/v1/messages/count_tokens only supports anthropic endpoint type, model ${modelId} is ${model.type} type`
       });
     }
 
@@ -688,8 +718,17 @@ async function handleCountTokens(req, res) {
       const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-      response = await fetch(countTokensUrl, fetchOptions);
+      try {
+        response = await fetch(countTokensUrl, fetchOptions);
+      } catch (networkError) {
+        if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
+        throw networkError;
+      }
       logInfo(`Response status: ${response.status}`);
+
+      if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
+        reportProxyFailure(proxyAgentInfo.proxy.url);
+      }
 
       if (response.ok) break;
 
@@ -727,7 +766,7 @@ async function handleCountTokens(req, res) {
   }
 }
 
-// 直接转发 Google 请求（不做格式转换）
+// Direct forward Google request (no format conversion)
 async function handleDirectGenerate(req, res) {
   logInfo('POST /v1/generate');
 
@@ -746,11 +785,11 @@ async function handleDirectGenerate(req, res) {
 
     logInfo(`Model: ${modelId}`);
 
-    // 只允许 google 类型端点
+    // Only allow google endpoint type
     if (model.type !== 'google') {
       return res.status(400).json({
         error: 'Invalid endpoint type',
-        message: `/v1/generate 接口只支持 google 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+        message: `/v1/generate only supports google endpoint type, model ${modelId} is ${model.type} type`
       });
     }
 
@@ -814,8 +853,17 @@ async function handleDirectGenerate(req, res) {
       const fetchOptions = { method: 'POST', headers, body: JSON.stringify(modifiedRequest) };
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
-      response = await fetch(endpoint.base_url, fetchOptions);
+      try {
+        response = await fetch(endpoint.base_url, fetchOptions);
+      } catch (networkError) {
+        if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
+        throw networkError;
+      }
       logInfo(`Response status: ${response.status}`);
+
+      if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
+        reportProxyFailure(proxyAgentInfo.proxy.url);
+      }
 
       if (response.ok) break;
 
@@ -875,7 +923,7 @@ async function handleDirectGenerate(req, res) {
   }
 }
 
-// 注册路由
+// Register routes
 router.post('/v1/chat/completions', handleChatCompletions);
 router.post('/v1/responses', handleDirectResponses);
 router.post('/v1/messages', handleDirectMessages);

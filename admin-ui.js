@@ -1,18 +1,18 @@
 /**
- * Admin UI - 内嵌 HTML/CSS/JS 模板
+ * Admin UI - Embedded HTML/CSS/JS templates
  */
 
 export function getLoginPage() {
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>droid2api 管理后台 - 登录</title>
+  <title>droid2api Admin - Login</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #0f1117;
       color: #e4e4e7;
       min-height: 100vh;
@@ -90,17 +90,17 @@ export function getLoginPage() {
 <body>
   <div class="login-card">
     <h1>droid2api</h1>
-    <div class="subtitle">管理控制台</div>
+    <div class="subtitle">Admin Console</div>
     <form id="loginForm">
       <div class="form-group">
-        <label for="username">用户名</label>
-        <input type="text" id="username" name="username" autocomplete="username" placeholder="请输入用户名" required>
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" placeholder="Enter username" required>
       </div>
       <div class="form-group">
-        <label for="password">密码</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" placeholder="请输入密码" required>
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" placeholder="Enter password" required>
       </div>
-      <button type="submit" class="btn-login" id="loginBtn">登 录</button>
+      <button type="submit" class="btn-login" id="loginBtn">Log In</button>
       <div class="error-msg" id="errorMsg"></div>
     </form>
   </div>
@@ -124,11 +124,11 @@ export function getLoginPage() {
         if (res.ok) {
           window.location.href = '/admin/dashboard';
         } else {
-          errEl.textContent = data.message || '登录失败';
+          errEl.textContent = data.message || 'Login failed';
           errEl.style.display = 'block';
         }
       } catch (err) {
-        errEl.textContent = '网络错误，请稍后重试';
+        errEl.textContent = 'Network error, please try again later';
         errEl.style.display = 'block';
       } finally {
         btn.disabled = false;
@@ -141,15 +141,15 @@ export function getLoginPage() {
 
 export function getDashboardPage() {
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>droid2api 管理后台</title>
+  <title>droid2api Admin</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #0f1117;
       color: #e4e4e7;
       min-height: 100vh;
@@ -394,32 +394,32 @@ export function getDashboardPage() {
 <body>
   <!-- Top Bar -->
   <div class="topbar">
-    <h1>droid2api 管理后台</h1>
+    <h1>droid2api Admin</h1>
     <div class="actions">
-      <span class="text-muted" id="autoRefreshLabel">自动刷新: 60秒</span>
-      <button class="btn btn-secondary btn-sm" onclick="logout()">退出登录</button>
+      <span class="text-muted" id="autoRefreshLabel">Auto-refresh: 60s</span>
+      <button class="btn btn-secondary btn-sm" onclick="logout()">Logout</button>
     </div>
   </div>
 
   <div class="container">
     <!-- Stats -->
     <div class="stats">
-      <div class="stat-card"><div class="label">总账号数</div><div class="value" id="statTotal">-</div></div>
-      <div class="stat-card"><div class="label">活跃</div><div class="value green" id="statActive">-</div></div>
-      <div class="stat-card"><div class="label">异常</div><div class="value red" id="statError">-</div></div>
-      <div class="stat-card"><div class="label">额度耗尽</div><div class="value" style="color:#f97316" id="statExhausted">-</div></div>
-      <div class="stat-card"><div class="label">已禁用</div><div class="value yellow" id="statDisabled">-</div></div>
+      <div class="stat-card"><div class="label">Total Accounts</div><div class="value" id="statTotal">-</div></div>
+      <div class="stat-card"><div class="label">Active</div><div class="value green" id="statActive">-</div></div>
+      <div class="stat-card"><div class="label">Error</div><div class="value red" id="statError">-</div></div>
+      <div class="stat-card"><div class="label">Exhausted</div><div class="value" style="color:#f97316" id="statExhausted">-</div></div>
+      <div class="stat-card"><div class="label">Disabled</div><div class="value yellow" id="statDisabled">-</div></div>
     </div>
 
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="left">
-        <button class="btn btn-primary" onclick="showAddModal()">+ 添加账号</button>
-        <button class="btn btn-secondary" onclick="checkAllBalances()" id="btnCheckAll">查询全部额度</button>
-        <button class="btn btn-secondary" onclick="refreshAllTokens()" id="btnRefreshAll">刷新全部Token</button>
-        <button class="btn btn-secondary" onclick="clearExhausted()" id="btnClearExhausted" style="color:#f97316;border-color:#f97316">清除耗尽账号</button>
+        <button class="btn btn-primary" onclick="showAddModal()">+ Add Account</button>
+        <button class="btn btn-secondary" onclick="checkAllBalances()" id="btnCheckAll">Check All Balances</button>
+        <button class="btn btn-secondary" onclick="refreshAllTokens()" id="btnRefreshAll">Refresh All Tokens</button>
+        <button class="btn btn-secondary" onclick="clearExhausted()" id="btnClearExhausted" style="color:#f97316;border-color:#f97316">Clear Exhausted</button>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="loadAccounts()">刷新列表</button>
+      <button class="btn btn-secondary btn-sm" onclick="loadAccounts()">Refresh</button>
     </div>
 
     <!-- Table -->
@@ -427,17 +427,17 @@ export function getDashboardPage() {
       <table>
         <thead>
           <tr>
-            <th>邮箱</th>
-            <th>标签</th>
-            <th>状态</th>
-            <th>使用率</th>
-            <th>剩余额度</th>
-            <th>上次检查</th>
-            <th>操作</th>
+            <th>Email</th>
+            <th>Label</th>
+            <th>Status</th>
+            <th>Usage</th>
+            <th>Remaining</th>
+            <th>Last Check</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="accountsBody">
-          <tr><td colspan="7" class="empty-state"><p>加载中...</p></td></tr>
+          <tr><td colspan="7" class="empty-state"><p>Loading...</p></td></tr>
         </tbody>
       </table>
     </div>
@@ -446,7 +446,7 @@ export function getDashboardPage() {
   <!-- Add Account Modal -->
   <div class="modal-overlay hidden" id="addModal">
     <div class="modal">
-      <h2>添加账号</h2>
+      <h2>Add Account</h2>
       <div class="modal-tabs">
         <button class="modal-tab active" data-tab="auth_json">auth.json</button>
         <button class="modal-tab" data-tab="auth_v2">auth.v2</button>
@@ -456,12 +456,12 @@ export function getDashboardPage() {
       <!-- auth.json tab -->
       <div class="tab-pane active" id="tabAuthJson">
         <div class="form-group">
-          <label>上传文件</label>
+          <label>Upload File</label>
           <div class="file-upload-area" id="authJsonFileArea">
             <input type="file" accept=".json" onchange="onFileSelected(this, 'authJsonInput', 'authJsonFileArea')">
-            <div class="hint" id="authJsonFileHint">点击或拖拽上传 auth.json</div>
+            <div class="hint" id="authJsonFileHint">Click or drag to upload auth.json</div>
           </div>
-          <div class="input-divider">或手动粘贴</div>
+          <div class="input-divider">or paste manually</div>
           <textarea id="authJsonInput" placeholder='{ "access_token": "...", "refresh_token": "..." }' rows="5"></textarea>
         </div>
       </div>
@@ -472,19 +472,19 @@ export function getDashboardPage() {
           <label>auth.v2.file</label>
           <div class="file-upload-area" id="v2FileArea">
             <input type="file" onchange="onFileSelected(this, 'v2FileInput', 'v2FileArea')">
-            <div class="hint" id="v2FileHint">点击或拖拽上传 auth.v2.file</div>
+            <div class="hint" id="v2FileHint">Click or drag to upload auth.v2.file</div>
           </div>
-          <div class="input-divider">或手动粘贴</div>
+          <div class="input-divider">or paste manually</div>
           <textarea id="v2FileInput" placeholder="IV:AuthTag:Ciphertext (Base64)" rows="3"></textarea>
         </div>
         <div class="form-group">
           <label>auth.v2.key</label>
           <div class="file-upload-area" id="v2KeyArea">
             <input type="file" onchange="onFileSelected(this, 'v2KeyInput', 'v2KeyArea')">
-            <div class="hint" id="v2KeyHint">点击或拖拽上传 auth.v2.key</div>
+            <div class="hint" id="v2KeyHint">Click or drag to upload auth.v2.key</div>
           </div>
-          <div class="input-divider">或手动粘贴</div>
-          <input type="text" id="v2KeyInput" placeholder="Base64 编码的密钥">
+          <div class="input-divider">or paste manually</div>
+          <input type="text" id="v2KeyInput" placeholder="Base64 encoded key">
         </div>
       </div>
 
@@ -492,18 +492,18 @@ export function getDashboardPage() {
       <div class="tab-pane" id="tabApiKey">
         <div class="form-group">
           <label>API Key</label>
-          <input type="text" id="apiKeyInput" placeholder="请输入 API Key（如 FACTORY_API_KEY）">
+          <input type="text" id="apiKeyInput" placeholder="Enter API Key (e.g. FACTORY_API_KEY)">
         </div>
       </div>
 
       <!-- Shared fields -->
       <div class="form-group">
-        <label for="labelInput">标签（可选）</label>
-        <input type="text" id="labelInput" placeholder="例如：团队账号1">
+        <label for="labelInput">Label (optional)</label>
+        <input type="text" id="labelInput" placeholder="e.g. Team Account 1">
       </div>
       <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="hideAddModal()">取消</button>
-        <button class="btn btn-primary" onclick="addAccount()" id="btnAdd">添加</button>
+        <button class="btn btn-secondary" onclick="hideAddModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="addAccount()" id="btnAdd">Add</button>
       </div>
     </div>
   </div>
@@ -523,7 +523,7 @@ export function getDashboardPage() {
       }
       const res = await fetch(path, opts);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || '请求失败');
+      if (!res.ok) throw new Error(data.message || data.error || 'Request failed');
       return data;
     }
 
@@ -564,7 +564,7 @@ export function getDashboardPage() {
     function renderAccounts(accounts) {
       const tbody = document.getElementById('accountsBody');
       if (!accounts || accounts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><p>暂无账号，点击"添加账号"开始使用</p></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><p>No accounts yet. Click "Add Account" to get started.</p></td></tr>';
         return;
       }
       tbody.innerHTML = accounts.map(a => {
@@ -579,19 +579,19 @@ export function getDashboardPage() {
 
         const lastChecked = a.cached_balance?.lastChecked
           ? timeAgo(a.cached_balance.lastChecked)
-          : '从未';
+          : 'Never';
 
         const statusMap = {
-          active: '<span class="badge badge-active">活跃</span>',
-          error: '<span class="badge badge-error" title="' + esc(a.error_message || '') + '">异常</span>',
-          exhausted: '<span class="badge badge-exhausted" title="' + esc(a.error_message || '') + '">额度耗尽</span>',
-          checking: '<span class="badge badge-checking">验证中</span>',
-          disabled: '<span class="badge badge-disabled">已禁用</span>'
+          active: '<span class="badge badge-active">Active</span>',
+          error: '<span class="badge badge-error" title="' + esc(a.error_message || '') + '">Error</span>',
+          exhausted: '<span class="badge badge-exhausted" title="' + esc(a.error_message || '') + '">Exhausted</span>',
+          checking: '<span class="badge badge-checking">Checking</span>',
+          disabled: '<span class="badge badge-disabled">Disabled</span>'
         };
         let statusBadge = statusMap[a.status] || statusMap.error;
         if (a.cooldown) {
           const cdSec = Math.max(0, Math.ceil((a.cooldown.until - Date.now()) / 1000));
-          statusBadge += ' <span class="badge badge-cooldown" title="' + esc(a.cooldown.reason) + '">冷却' + cdSec + 's</span>';
+          statusBadge += ' <span class="badge badge-cooldown" title="' + esc(a.cooldown.reason) + '">Cooldown ' + cdSec + 's</span>';
         }
 
         const isApiKey = a.type === 'apikey';
@@ -606,13 +606,13 @@ export function getDashboardPage() {
           '<td>' + remaining + '</td>' +
           '<td class="text-muted">' + lastChecked + '</td>' +
           '<td><div class="cell-actions">' +
-            '<button class="btn btn-secondary btn-sm" onclick="checkBalance(\\'' + a.id + '\\')">查额度</button>' +
-            (isApiKey ? '' : '<button class="btn btn-secondary btn-sm" onclick="refreshToken(\\'' + a.id + '\\')">刷新</button>') +
+            '<button class="btn btn-secondary btn-sm" onclick="checkBalance(\\'' + a.id + '\\')">Balance</button>' +
+            (isApiKey ? '' : '<button class="btn btn-secondary btn-sm" onclick="refreshToken(\\'' + a.id + '\\')">Refresh</button>') +
             (a.status === 'active'
-              ? '<button class="btn btn-secondary btn-sm" onclick="toggleStatus(\\'' + a.id + '\\', \\'disabled\\')">禁用</button>'
-              : '<button class="btn btn-secondary btn-sm" onclick="toggleStatus(\\'' + a.id + '\\', \\'active\\')">启用</button>') +
-            '<button class="btn btn-danger btn-sm" onclick="deleteAccount(\\'' + a.id + '\\')">删除</button>' +
-          '<button class="btn btn-secondary btn-sm" onclick="copyAuthJson(\\'' + a.id + '\\')">复制JSON</button>' +
+              ? '<button class="btn btn-secondary btn-sm" onclick="toggleStatus(\\'' + a.id + '\\', \\'disabled\\')">Disable</button>'
+              : '<button class="btn btn-secondary btn-sm" onclick="toggleStatus(\\'' + a.id + '\\', \\'active\\')">Enable</button>') +
+            '<button class="btn btn-danger btn-sm" onclick="deleteAccount(\\'' + a.id + '\\')">Delete</button>' +
+          '<button class="btn btn-secondary btn-sm" onclick="copyAuthJson(\\'' + a.id + '\\')">Copy JSON</button>' +
           '</div></td>' +
         '</tr>';
       }).join('');
@@ -620,20 +620,21 @@ export function getDashboardPage() {
 
     function formatTokens(n) {
       if (n === null || n === undefined) return '-';
-      if (n >= 1e8) return (n / 1e8).toFixed(1) + ' 亿';
-      if (n >= 1e4) return (n / 1e4).toFixed(0) + ' 万';
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
       return n.toString();
     }
 
     function timeAgo(ts) {
       const diff = Date.now() - ts;
       const sec = Math.floor(diff / 1000);
-      if (sec < 60) return sec + '秒前';
+      if (sec < 60) return sec + 's ago';
       const min = Math.floor(sec / 60);
-      if (min < 60) return min + '分钟前';
+      if (min < 60) return min + 'm ago';
       const hr = Math.floor(min / 60);
-      if (hr < 24) return hr + '小时前';
-      return Math.floor(hr / 24) + '天前';
+      if (hr < 24) return hr + 'h ago';
+      return Math.floor(hr / 24) + 'd ago';
     }
 
     function esc(s) {
@@ -668,7 +669,7 @@ export function getDashboardPage() {
         area.classList.add('has-file');
         // Replace hint with filename
         const hint = area.querySelector('.hint');
-        if (hint) hint.innerHTML = '<span class="filename">' + esc(file.name) + '</span> 已选择';
+        if (hint) hint.innerHTML = '<span class="filename">' + esc(file.name) + '</span> selected';
       };
       reader.readAsText(file);
     }
@@ -691,9 +692,9 @@ export function getDashboardPage() {
       document.getElementById('v2KeyInput').value = '';
       document.getElementById('apiKeyInput').value = '';
       document.getElementById('labelInput').value = '';
-      resetFileArea('authJsonFileArea', '点击或拖拽上传 auth.json');
-      resetFileArea('v2FileArea', '点击或拖拽上传 auth.v2.file');
-      resetFileArea('v2KeyArea', '点击或拖拽上传 auth.v2.key');
+      resetFileArea('authJsonFileArea', 'Click or drag to upload auth.json');
+      resetFileArea('v2FileArea', 'Click or drag to upload auth.v2.file');
+      resetFileArea('v2KeyArea', 'Click or drag to upload auth.v2.key');
       // Reset to first tab
       currentAddTab = 'auth_json';
       document.querySelectorAll('.modal-tab').forEach(el => el.classList.remove('active'));
@@ -715,17 +716,17 @@ export function getDashboardPage() {
 
         if (currentAddTab === 'apikey') {
           const apiKey = document.getElementById('apiKeyInput').value.trim();
-          if (!apiKey) throw new Error('请输入 API Key');
+          if (!apiKey) throw new Error('Please enter an API Key');
           body = { type: 'apikey', apiKey, label };
         } else if (currentAddTab === 'auth_v2') {
           const v2File = document.getElementById('v2FileInput').value.trim();
           const v2Key = document.getElementById('v2KeyInput').value.trim();
-          if (!v2File) throw new Error('请提供 auth.v2.file 的内容');
-          if (!v2Key) throw new Error('请提供 auth.v2.key 的内容');
+          if (!v2File) throw new Error('Please provide auth.v2.file content');
+          if (!v2Key) throw new Error('Please provide auth.v2.key content');
           body = { type: 'auth_v2', v2File, v2Key, label };
         } else {
           const raw = document.getElementById('authJsonInput').value.trim();
-          if (!raw) throw new Error('请提供 auth.json 的内容');
+          if (!raw) throw new Error('Please provide auth.json content');
           const authData = JSON.parse(raw);
           body = { type: 'auth_json', authData, label };
         }
@@ -733,13 +734,13 @@ export function getDashboardPage() {
         const res = await api('POST', '/admin/api/accounts', body);
         const st = res.account?.status;
         if (st === 'active') {
-          toast('账号添加成功，状态：活跃');
+          toast('Account added successfully, status: Active');
         } else if (st === 'exhausted') {
-          toast('账号已添加，但额度已耗尽', 'error');
+          toast('Account added, but quota is exhausted', 'error');
         } else if (st === 'error') {
-          toast('账号已添加，但验证失败: ' + (res.account?.error_message || '未知错误'), 'error');
+          toast('Account added, but verification failed: ' + (res.account?.error_message || 'Unknown error'), 'error');
         } else {
-          toast('账号已添加，状态：' + (st || '未知'));
+          toast('Account added, status: ' + (st || 'unknown'));
         }
         hideAddModal();
         loadAccounts();
@@ -751,10 +752,10 @@ export function getDashboardPage() {
     }
 
     async function deleteAccount(id) {
-      if (!confirm('确定要删除该账号吗？此操作不可恢复。')) return;
+      if (!confirm('Are you sure you want to delete this account? This cannot be undone.')) return;
       try {
         await api('DELETE', '/admin/api/accounts/' + id);
-        toast('账号已删除');
+        toast('Account deleted');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -762,25 +763,25 @@ export function getDashboardPage() {
     async function toggleStatus(id, status) {
       try {
         await api('PATCH', '/admin/api/accounts/' + id, { status });
-        toast('状态已更新');
+        toast('Status updated');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
     }
 
     async function checkBalance(id) {
       try {
-        toast('正在查询额度...');
+        toast('Checking balance...');
         await api('POST', '/admin/api/accounts/' + id + '/check-balance');
-        toast('额度已更新');
+        toast('Balance updated');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
     }
 
     async function refreshToken(id) {
       try {
-        toast('正在刷新Token...');
+        toast('Refreshing token...');
         await api('POST', '/admin/api/accounts/' + id + '/refresh-token');
-        toast('Token已刷新');
+        toast('Token refreshed');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -789,10 +790,10 @@ export function getDashboardPage() {
       const btn = document.getElementById('btnCheckAll');
       btn.disabled = true;
       try {
-        toast('正在查询所有账号额度...');
+        toast('Checking all balances...');
         const data = await api('POST', '/admin/api/check-all-balances');
         const failed = data.results.filter(r => !r.success).length;
-        toast(failed ? failed + ' 个失败，其余已更新' : '所有额度已更新');
+        toast(failed ? failed + ' failed, rest updated' : 'All balances updated');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
       finally { btn.disabled = false; }
@@ -802,10 +803,10 @@ export function getDashboardPage() {
       const btn = document.getElementById('btnRefreshAll');
       btn.disabled = true;
       try {
-        toast('正在刷新所有Token...');
+        toast('Refreshing all tokens...');
         const data = await api('POST', '/admin/api/refresh-all-tokens');
         const failed = data.results.filter(r => !r.success).length;
-        toast(failed ? failed + ' 个失败，其余已刷新' : '所有Token已刷新');
+        toast(failed ? failed + ' failed, rest refreshed' : 'All tokens refreshed');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
       finally { btn.disabled = false; }
@@ -814,15 +815,15 @@ export function getDashboardPage() {
     async function clearExhausted() {
       const count = document.getElementById('statExhausted')?.textContent || '0';
       if (count === '0') {
-        toast('没有额度耗尽的账号', 'error');
+        toast('No exhausted accounts', 'error');
         return;
       }
-      if (!confirm('确认清除所有额度耗尽的账号？此操作不可撤销！')) return;
+      if (!confirm('Remove all exhausted accounts? This cannot be undone!')) return;
       const btn = document.getElementById('btnClearExhausted');
       btn.disabled = true;
       try {
         const data = await api('POST', '/admin/api/clear-exhausted');
-        toast('已清除 ' + data.removed + ' 个耗尽账号');
+        toast('Removed ' + data.removed + ' exhausted account(s)');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
       finally { btn.disabled = false; }
@@ -833,7 +834,7 @@ export function getDashboardPage() {
         const data = await api('GET', '/admin/api/accounts/' + id + '/auth-json');
         const json = JSON.stringify(data.authJson, null, 2);
         await copyToClipboard(json);
-        toast('auth.json 已复制到剪贴板');
+        toast('auth.json copied to clipboard');
       } catch (e) {
         toast(e.message, 'error');
       }
@@ -855,7 +856,7 @@ export function getDashboardPage() {
         document.execCommand('copy');
       } catch (_) {
         document.body.removeChild(ta);
-        throw new Error('复制失败，请手动复制');
+        throw new Error('Copy failed, please copy manually');
       }
       document.body.removeChild(ta);
     }

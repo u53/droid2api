@@ -28,25 +28,25 @@ const pendingHealthChecks = new Set();
 const lastUsedMap = new Map();
 
 // ────────────────────────────────────────
-// Concurrency Control (防止竞态条件)
+// Concurrency Control (prevent race conditions)
 // ────────────────────────────────────────
 
-// Save 防抖: 合并短时间内的多次 saveAccounts 调用为一次磁盘写入
+// Save debounce: merge multiple saveAccounts calls into a single disk write
 let saveTimer = null;
 let savePending = false;
-const SAVE_DEBOUNCE_MS = 200; // 200ms 内的多次写入合并
+const SAVE_DEBOUNCE_MS = 200; // merge writes within 200ms
 
-// 批量操作互斥锁: 防止 refreshAllTokens / checkAllBalances 同时运行
+// Bulk operation mutex: prevent refreshAllTokens / checkAllBalances from running concurrently
 let bulkOperationLock = Promise.resolve();
 
-// 单账号操作锁: 防止同一账号同时进行 token 刷新和余额检查
+// Per-account lock: prevent concurrent token refresh and balance check on the same account
 // Map<accountId, Promise>
 const accountLockMap = new Map();
 
 /**
- * 获取批量操作锁 —— 确保同一时间只有一个批量操作在执行
- * @param {string} operationName - 操作名称 (用于日志)
- * @returns {Promise<Function>} release 函数，调用后释放锁
+ * Acquire bulk operation lock — ensures only one bulk operation runs at a time
+ * @param {string} operationName - operation name (for logging)
+ * @returns {Promise<Function>} release function, call to release the lock
  */
 function acquireBulkLock(operationName) {
   let release;
@@ -62,9 +62,9 @@ function acquireBulkLock(operationName) {
 }
 
 /**
- * 获取单账号操作锁 —— 确保同一账号不会同时执行 token 刷新和余额检查
+ * Acquire per-account lock — ensures the same account won't run token refresh and balance check concurrently
  * @param {string} accountId
- * @returns {Promise<Function>} release 函数
+ * @returns {Promise<Function>} release function
  */
 function acquireAccountLock(accountId) {
   let release;
@@ -73,7 +73,7 @@ function acquireAccountLock(accountId) {
   accountLockMap.set(accountId, next);
   return prev.then(() => {
     return () => {
-      // 如果当前 promise 仍是 map 中最新的，清理掉
+      // If current promise is still the latest in the map, clean it up
       if (accountLockMap.get(accountId) === next) {
         accountLockMap.delete(accountId);
       }
@@ -105,7 +105,7 @@ function loadAccounts() {
 }
 
 /**
- * 立即写入磁盘 (内部使用)
+ * Write to disk immediately (internal use)
  */
 function saveAccountsImmediate() {
   try {
@@ -118,13 +118,13 @@ function saveAccountsImmediate() {
 }
 
 /**
- * 防抖保存: 合并短时间内的多次写入为一次磁盘操作
- * - 首次调用立即写入
- * - 后续调用在 SAVE_DEBOUNCE_MS 内合并为一次
+ * Debounced save: merge multiple writes within a short window into a single disk operation
+ * - First call writes immediately
+ * - Subsequent calls within SAVE_DEBOUNCE_MS are merged into one
  */
 function saveAccounts() {
   if (!savePending) {
-    // 首次调用，立即写入
+    // First call, write immediately
     savePending = true;
     saveAccountsImmediate();
     saveTimer = setTimeout(() => {
@@ -132,7 +132,7 @@ function saveAccounts() {
       saveTimer = null;
     }, SAVE_DEBOUNCE_MS);
   } else {
-    // 已有 pending，重置定时器，延迟写入最新状态
+    // Already pending, reset timer and defer writing latest state
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveAccountsImmediate();
@@ -143,7 +143,7 @@ function saveAccounts() {
 }
 
 /**
- * 强制立即保存 (用于关键操作如添加/删除账号)
+ * Force immediate save (for critical operations like add/remove account)
  */
 function saveAccountsSync() {
   if (saveTimer) {
@@ -203,12 +203,12 @@ export function decryptAuthV2(fileContent, keyContent) {
   try {
     const key = Buffer.from(keyContent.trim(), 'base64');
     if (key.length !== 32) {
-      throw new Error(`密钥长度无效: 期望32字节, 实际${key.length}字节`);
+      throw new Error(`Invalid key length: expected 32 bytes, got ${key.length} bytes`);
     }
 
     const parts = fileContent.trim().split(':');
     if (parts.length !== 3) {
-      throw new Error('auth.v2.file 格式无效，需要 IV:AuthTag:密文 三段');
+      throw new Error('Invalid auth.v2.file format, expected IV:AuthTag:Ciphertext (3 parts)');
     }
 
     const iv = Buffer.from(parts[0], 'base64');
@@ -222,12 +222,12 @@ export function decryptAuthV2(fileContent, keyContent) {
 
     const data = JSON.parse(decrypted);
     if (!data.refresh_token) {
-      throw new Error('解密后的数据缺少 refresh_token 字段');
+      throw new Error('Decrypted data is missing refresh_token field');
     }
     return data;
   } catch (error) {
     if (error.message.includes('Unsupported state') || error.code === 'ERR_OSSL_BAD_DECRYPT') {
-      throw new Error('解密失败：密钥与加密文件不匹配');
+      throw new Error('Decryption failed: key does not match the encrypted file');
     }
     throw error;
   }
@@ -239,13 +239,13 @@ export function decryptAuthV2(fileContent, keyContent) {
  */
 export function addAccount(authData, label = '') {
   if (!authData.refresh_token) {
-    throw new Error('auth.json 必须包含 refresh_token 字段');
+    throw new Error('auth.json must contain a refresh_token field');
   }
 
   // Check for duplicate by refresh_token
   const existing = accounts.find(a => a.refresh_token === authData.refresh_token);
   if (existing) {
-    throw new Error(`账号已存在 (${existing.email || existing.id})`);
+    throw new Error(`Account already exists (${existing.email || existing.id})`);
   }
 
   const account = {
@@ -264,7 +264,7 @@ export function addAccount(authData, label = '') {
   };
 
   accounts.push(account);
-  saveAccountsSync(); // 关键操作：立即写入，不走防抖
+  saveAccountsSync(); // Critical: write immediately, skip debounce
   logInfo(`Added auth_json account: ${account.id} (${account.email || 'no email'}), verifying...`);
   return account;
 }
@@ -275,7 +275,7 @@ export function addAccount(authData, label = '') {
  */
 export function addApiKeyAccount(apiKey, label = '') {
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') {
-    throw new Error('API Key 不能为空');
+    throw new Error('API Key cannot be empty');
   }
 
   const key = apiKey.trim();
@@ -283,7 +283,7 @@ export function addApiKeyAccount(apiKey, label = '') {
   // Check for duplicate
   const existing = accounts.find(a => a.type === 'apikey' && a.access_token === key);
   if (existing) {
-    throw new Error(`该 API Key 已存在 (${existing.label || existing.id})`);
+    throw new Error(`API Key already exists (${existing.label || existing.id})`);
   }
 
   const account = {
@@ -302,7 +302,7 @@ export function addApiKeyAccount(apiKey, label = '') {
   };
 
   accounts.push(account);
-  saveAccountsSync(); // 关键操作：立即写入，不走防抖
+  saveAccountsSync(); // Critical: write immediately, skip debounce
   logInfo(`Added apikey account: ${account.id} (${account.label || 'no label'}), verifying...`);
   return account;
 }
@@ -324,7 +324,7 @@ export async function initializeAccount(id) {
       logInfo(`Token refreshed for new account ${account.id} (${account.email || 'no email'})`);
     } catch (error) {
       account.status = 'error';
-      account.error_message = 'Token 刷新失败: ' + error.message;
+      account.error_message = 'Token refresh failed: ' + error.message;
       saveAccounts();
       logError(`Init failed for ${account.id}: token refresh error`, error);
       return account;
@@ -343,7 +343,7 @@ export async function initializeAccount(id) {
     logInfo(`Account ${account.id} initialized: status=${account.status}, usage=${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%`);
   } catch (error) {
     account.status = 'error';
-    account.error_message = '额度查询失败: ' + error.message;
+    account.error_message = 'Balance check failed: ' + error.message;
     saveAccounts();
     logError(`Init failed for ${account.id}: balance check error`, error);
   }
@@ -360,7 +360,7 @@ export function removeAccount(id) {
     throw new Error(`Account not found: ${id}`);
   }
   const removed = accounts.splice(idx, 1)[0];
-  saveAccountsSync(); // 关键操作：立即写入，不走防抖
+  saveAccountsSync(); // Critical: write immediately, skip debounce
   logInfo(`Removed account: ${id} (${removed.email || 'no email'})`);
   return removed;
 }
@@ -381,14 +381,14 @@ export async function clearExhaustedAccounts() {
     const removedIds = exhausted.map(a => a.id);
     const removedInfo = exhausted.map(a => `${a.id} (${a.email || a.label || 'unknown'})`);
 
-    // 从数组中移除（倒序，防止索引偏移）
+    // Remove from array (reverse order to prevent index shift)
     for (let i = accounts.length - 1; i >= 0; i--) {
       if (accounts[i].status === 'exhausted') {
         accounts.splice(i, 1);
       }
     }
 
-    saveAccountsSync(); // 关键操作：立即写盘
+    saveAccountsSync(); // Critical: write to disk immediately
     logInfo(`[ClearExhausted] Removed ${removedIds.length} exhausted accounts: ${removedInfo.join(', ')}`);
     return { removed: removedIds.length, ids: removedIds };
   } finally {
@@ -414,7 +414,7 @@ export function updateAccount(id, updates) {
       account.error_message = null;
     }
   }
-  saveAccountsSync(); // 管理员操作：立即写入
+  saveAccountsSync(); // Admin operation: write immediately
   return account;
 }
 
@@ -455,7 +455,7 @@ export async function refreshAccountToken(account) {
     throw new Error('No refresh token available');
   }
 
-  // 获取单账号锁，防止同一账号同时刷新 token 和检查余额
+  // Acquire per-account lock to prevent concurrent token refresh and balance check
   const releaseAccountLock = await acquireAccountLock(account.id);
 
   try {
@@ -535,12 +535,12 @@ export async function refreshAllTokens() {
   const releaseBulkLock = await acquireBulkLock('refreshAllTokens');
   try {
     const results = [];
-    // 拷贝数组快照，防止迭代过程中数组被修改
+    // Copy snapshot to prevent array modification during iteration
     const snapshot = [...accounts];
     for (const account of snapshot) {
       if (account.status === 'disabled') continue;
-      if (account.type === 'apikey') continue; // API Key 账号无需刷新
-      // 检查账号是否已被删除
+      if (account.type === 'apikey') continue; // API Key accounts don't need refresh
+      // Check if account was deleted during iteration
       if (!accounts.includes(account)) continue;
       try {
         await refreshAccountToken(account);
@@ -556,6 +556,29 @@ export async function refreshAllTokens() {
 }
 
 // ────────────────────────────────────────
+// Concurrency Helper
+// ────────────────────────────────────────
+
+const BALANCE_CHECK_CONCURRENCY = 5;
+
+/**
+ * Run async function over items with limited concurrency.
+ * @param {Array} items
+ * @param {number} concurrency
+ * @param {Function} fn - async (item) => result
+ * @returns {Promise<PromiseSettledResult[]>}
+ */
+async function runWithConcurrency(items, concurrency, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const chunk = items.slice(i, i + concurrency);
+    const chunkResults = await Promise.allSettled(chunk.map(fn));
+    results.push(...chunkResults);
+  }
+  return results;
+}
+
+// ────────────────────────────────────────
 // Balance Checking
 // ────────────────────────────────────────
 
@@ -567,7 +590,7 @@ export async function checkAccountBalance(account) {
     throw new Error('No access token available, refresh token first');
   }
 
-  // 获取单账号锁，防止同一账号同时刷新 token 和检查余额
+  // Acquire per-account lock to prevent concurrent token refresh and balance check
   const releaseAccountLock = await acquireAccountLock(account.id);
 
   try {
@@ -610,7 +633,7 @@ export async function checkAccountBalance(account) {
     if (usedRatio >= 1.0) {
       if (account.status !== 'disabled') {
         account.status = 'exhausted';
-        account.error_message = `额度已用完 (${(usedRatio * 100).toFixed(1)}%)`;
+        account.error_message = `Quota exhausted (${(usedRatio * 100).toFixed(1)}%)`;
         logInfo(`Account ${account.id} marked as exhausted: ${(usedRatio * 100).toFixed(1)}% used`);
       }
     } else if (account.status === 'exhausted') {
@@ -655,22 +678,20 @@ export async function checkBalanceById(id) {
 export async function checkAllBalances() {
   const releaseBulkLock = await acquireBulkLock('checkAllBalances');
   try {
-    const results = [];
-    // 拷贝数组快照，防止迭代过程中数组被修改
-    const snapshot = [...accounts];
-    for (const account of snapshot) {
-      if (account.status === 'disabled') continue;
-      if (!account.access_token) continue;
-      // 检查账号是否已被删除
-      if (!accounts.includes(account)) continue;
-      try {
-        const balance = await checkAccountBalance(account);
-        results.push({ id: account.id, success: true, balance });
-      } catch (error) {
-        results.push({ id: account.id, success: false, error: error.message });
-      }
-    }
-    return results;
+    const eligible = [...accounts].filter(a =>
+      a.status !== 'disabled' && a.access_token && accounts.includes(a)
+    );
+
+    const settled = await runWithConcurrency(eligible, BALANCE_CHECK_CONCURRENCY, async (account) => {
+      if (!accounts.includes(account)) return { id: account.id, success: false, error: 'Account removed' };
+      const balance = await checkAccountBalance(account);
+      return { id: account.id, success: true, balance };
+    });
+
+    return settled.map((r, i) => {
+      if (r.status === 'fulfilled') return r.value;
+      return { id: eligible[i].id, success: false, error: r.reason?.message || String(r.reason) };
+    });
   } finally {
     releaseBulkLock();
   }
@@ -718,16 +739,16 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
   const trimmedReason = (reason || '').substring(0, 200);
 
   const reasonMap = {
-    401: '认证失败 (401)',
-    402: '额度不足 (402)',
-    403: '请求被拒绝 (403)',
-    429: '请求频率过高 (429)'
+    401: 'Auth failed (401)',
+    402: 'Insufficient quota (402)',
+    403: 'Request rejected (403)',
+    429: 'Rate limited (429)'
   };
 
   const displayReason = reasonMap[statusCode] || `HTTP ${statusCode}`;
   const fullReason = `${displayReason}: ${trimmedReason}`;
 
-  // 先进入短暂冷却，不影响主流程
+  // Enter short cooldown without blocking the main flow
   cooldownMap.set(account.id, {
     until: Date.now() + COOLDOWN_MS,
     reason: fullReason,
@@ -736,8 +757,8 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
 
   logInfo(`[Cooldown] Account ${account.id} (${account.email || account.label || 'unknown'}) paused 3s: ${displayReason}`);
 
-  // 对可能是账号级别问题的错误码，异步检查真实状态（不阻塞主流程）
-  // 429 纯粹是限频，冷却到期自然恢复，无需检查
+  // For status codes that may indicate account-level issues, async check real status (non-blocking)
+  // 429 is purely rate limiting, recovers naturally after cooldown
   if ([401, 402, 403].includes(statusCode)) {
     asyncAccountHealthCheck(account, statusCode, trimmedReason);
   }
@@ -755,7 +776,7 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
  * @param {string} errorDetail - The error detail from the failed request
  */
 function asyncAccountHealthCheck(account, statusCode, errorDetail) {
-  // 防止对同一账号重复发起健康检查
+  // Prevent duplicate health checks on the same account
   if (pendingHealthChecks.has(account.id)) {
     logDebug(`[HealthCheck] Already checking account ${account.id}, skipping duplicate`);
     return;
@@ -764,37 +785,37 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
   pendingHealthChecks.add(account.id);
   logInfo(`[HealthCheck] Starting async health check for account ${account.id} (triggered by ${statusCode})`);
 
-  // 使用 Promise + catch，完全不阻塞调用方
+  // Use Promise + catch to avoid blocking the caller
   (async () => {
     try {
-      // Step 1: 尝试查询余额，判断 token 是否有效 & 额度是否耗尽
+      // Step 1: Check balance to determine if token is valid & quota is exhausted
       const balance = await checkAccountBalance(account);
 
-      // 余额检查成功 → token 有效，账号未封禁
-      // checkAccountBalance 内部已经处理了 exhausted 状态的设置
+      // Balance check succeeded → token valid, account not banned
+      // checkAccountBalance already handles setting exhausted status internally
       if (balance.usedRatio >= 1.0) {
         logInfo(`[HealthCheck] Account ${account.id} confirmed exhausted (${(balance.usedRatio * 100).toFixed(1)}% used)`);
       } else {
-        // 额度正常，说明之前的失败只是临时问题，冷却到期后自动恢复
+        // Quota normal, previous failure was transient, will auto-recover after cooldown
         logInfo(`[HealthCheck] Account ${account.id} is healthy (${(balance.usedRatio * 100).toFixed(1)}% used), was a transient error`);
       }
     } catch (error) {
-      // 余额检查也失败了 → 可能是 token 失效或账号被封
+      // Balance check also failed → possibly invalid token or banned account
       logError(`[HealthCheck] Balance check failed for account ${account.id}`, error);
 
-      // 401 特殊处理：需要尝试刷新 token，refreshAccountToken 内部有自己的锁
+      // 401 special handling: try to refresh token (refreshAccountToken has its own lock)
       if (statusCode === 401) {
         logInfo(`[HealthCheck] Account ${account.id} token may be invalid, attempting refresh...`);
         try {
           await refreshAccountToken(account);
           logInfo(`[HealthCheck] Account ${account.id} token refreshed successfully, recovered`);
         } catch (refreshError) {
-          // 刷新也失败 → 加锁标记为 error
+          // Refresh also failed → lock and mark as error
           const releaseAccountLock = await acquireAccountLock(account.id);
           try {
             if (accounts.includes(account) && account.status !== 'disabled') {
               account.status = 'error';
-              account.error_message = `认证失败且刷新失败: ${refreshError.message}`;
+              account.error_message = `Auth failed and token refresh failed: ${refreshError.message}`;
               saveAccountsSync();
               logError(`[HealthCheck] Account ${account.id} marked as error: token refresh also failed`, refreshError);
             }
@@ -805,30 +826,30 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
         return;
       }
 
-      // 402/403: 加锁修改状态，防止与其他操作竞态
+      // 402/403: lock and update status to prevent race with other operations
       const releaseAccountLock = await acquireAccountLock(account.id);
       try {
-        // 检查账号是否在健康检查期间已被删除或手动处理
+        // Check if account was removed or manually handled during health check
         if (!accounts.includes(account)) {
           logInfo(`[HealthCheck] Account ${account.id} was removed during check, skipping status update`);
           return;
         }
-        // 如果管理员已手动处理（比如禁用），不再覆盖
+        // If admin already handled manually (e.g., disabled), don't override
         if (account.status === 'disabled') {
           logInfo(`[HealthCheck] Account ${account.id} was manually disabled, skipping status update`);
           return;
         }
 
         if (statusCode === 402) {
-          // 402 + 余额查询也失败 → 额度问题，标记为 exhausted
+          // 402 + balance check also failed → quota issue, mark as exhausted
           account.status = 'exhausted';
-          account.error_message = `额度不足 (402)，余额查询也失败: ${error.message}`;
+          account.error_message = `Insufficient quota (402), balance check also failed: ${error.message}`;
           saveAccountsSync();
           logInfo(`[HealthCheck] Account ${account.id} marked as exhausted (402 + balance check failed)`);
         } else if (statusCode === 403) {
-          // 403 + 余额查询也失败 → 很可能是封号
+          // 403 + balance check also failed → likely account ban
           account.status = 'error';
-          account.error_message = `疑似封号 (403)，余额查询也失败: ${error.message}`;
+          account.error_message = `Suspected ban (403), balance check also failed: ${error.message}`;
           saveAccountsSync();
           logError(`[HealthCheck] Account ${account.id} marked as error: suspected ban (403 + balance check failed)`);
         }
@@ -882,9 +903,9 @@ export async function getNextApiKey(excludeTokens = []) {
   if (active.length === 0) {
     const coolingDown = accounts.filter(a => a.status === 'active' && isAccountCoolingDown(a.id));
     if (coolingDown.length > 0) {
-      throw new Error(`所有可用账号均在冷却中 (${coolingDown.length} 个)，请稍后重试`);
+      throw new Error(`All available accounts are in cooldown (${coolingDown.length}), please retry later`);
     }
-    throw new Error('没有可用的活跃账号');
+    throw new Error('No active accounts available');
   }
 
   // 2. Exclude exhausted
@@ -893,13 +914,13 @@ export async function getNextApiKey(excludeTokens = []) {
     return a.cached_balance.usedRatio < 1.0;
   });
   if (available.length === 0) {
-    throw new Error('所有活跃账号额度均已耗尽 (100%)');
+    throw new Error('All active accounts have exhausted their quota (100%)');
   }
 
   // 3. Must have token or refresh token
   const usable = available.filter(a => a.access_token || a.refresh_token);
   if (usable.length === 0) {
-    throw new Error('没有可用的账号 (缺少 token)');
+    throw new Error('No usable accounts (missing token)');
   }
 
   // 4. Sort: primary by usage ratio asc, secondary by least-recently-used
@@ -948,7 +969,7 @@ export async function getNextApiKey(excludeTokens = []) {
     }
   }
 
-  throw new Error('所有账号均无法提供有效的 API Key');
+  throw new Error('All accounts failed to provide a valid API key');
 }
 
 // ────────────────────────────────────────
@@ -967,7 +988,7 @@ async function backgroundRefreshTokens() {
     const snapshot = [...accounts];
     for (const account of snapshot) {
       if (account.status !== 'active') continue;
-      if (account.type === 'apikey') continue; // API Key 账号无需刷新
+      if (account.type === 'apikey') continue; // API Key accounts don't need refresh
       if (!account.refresh_token) continue;
       if (!accounts.includes(account)) continue;
 
@@ -994,11 +1015,12 @@ async function backgroundRefreshTokens() {
 async function backgroundCheckBalances() {
   const releaseBulkLock = await acquireBulkLock('backgroundCheckBalances');
   try {
-    const snapshot = [...accounts];
-    for (const account of snapshot) {
-      if (account.status === 'disabled' || account.status === 'checking') continue;
-      if (!account.access_token) continue;
-      if (!accounts.includes(account)) continue;
+    const eligible = [...accounts].filter(a =>
+      a.status !== 'disabled' && a.status !== 'checking' && a.access_token && accounts.includes(a)
+    );
+
+    await runWithConcurrency(eligible, BALANCE_CHECK_CONCURRENCY, async (account) => {
+      if (!accounts.includes(account)) return;
       try {
         const prevStatus = account.status;
         await checkAccountBalance(account);
@@ -1012,7 +1034,7 @@ async function backgroundCheckBalances() {
       } catch (error) {
         logError(`Background balance check failed for ${account.id}`, error);
       }
-    }
+    });
   } finally {
     releaseBulkLock();
   }
@@ -1052,7 +1074,7 @@ export function stopBackgroundTasks() {
     clearInterval(timer);
   }
   backgroundTimers = [];
-  // 停止时强制刷盘，确保所有 pending 的改动不丢失
+  // Force flush to disk on stop to ensure no pending changes are lost
   if (savePending && saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;

@@ -42,7 +42,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 404 处理 - 捕获所有未匹配的路由
+// 404 handler - catch all unmatched routes
 app.use((req, res, next) => {
   const errorInfo = {
     timestamp: new Date().toISOString(),
@@ -62,35 +62,35 @@ app.use((req, res, next) => {
   };
 
   console.error('\n' + '='.repeat(80));
-  console.error('❌ 非法请求地址');
+  console.error('Invalid request path');
   console.error('='.repeat(80));
-  console.error(`时间: ${errorInfo.timestamp}`);
-  console.error(`方法: ${errorInfo.method}`);
-  console.error(`地址: ${errorInfo.url}`);
-  console.error(`路径: ${errorInfo.path}`);
-  
+  console.error(`Time: ${errorInfo.timestamp}`);
+  console.error(`Method: ${errorInfo.method}`);
+  console.error(`URL: ${errorInfo.url}`);
+  console.error(`Path: ${errorInfo.path}`);
+
   if (Object.keys(errorInfo.query).length > 0) {
-    console.error(`查询参数: ${JSON.stringify(errorInfo.query, null, 2)}`);
+    console.error(`Query params: ${JSON.stringify(errorInfo.query, null, 2)}`);
   }
-  
+
   if (errorInfo.body && Object.keys(errorInfo.body).length > 0) {
-    console.error(`请求体: ${JSON.stringify(errorInfo.body, null, 2)}`);
+    console.error(`Request body: ${JSON.stringify(errorInfo.body, null, 2)}`);
   }
-  
-  console.error(`客户端IP: ${errorInfo.ip}`);
+
+  console.error(`Client IP: ${errorInfo.ip}`);
   console.error(`User-Agent: ${errorInfo.headers['user-agent'] || 'N/A'}`);
-  
+
   if (errorInfo.headers.referer) {
-    console.error(`来源: ${errorInfo.headers.referer}`);
+    console.error(`Referer: ${errorInfo.headers.referer}`);
   }
-  
+
   console.error('='.repeat(80) + '\n');
 
   logError('Invalid request path', errorInfo);
 
   res.status(404).json({
     error: 'Not Found',
-    message: `路径 ${req.method} ${req.path} 不存在`,
+    message: `Path ${req.method} ${req.path} does not exist`,
     timestamp: errorInfo.timestamp,
     availableEndpoints: [
       'GET /v1/models',
@@ -103,7 +103,7 @@ app.use((req, res, next) => {
   });
 });
 
-// 错误处理中间件
+// Error handling middleware
 app.use((err, req, res, next) => {
   logError('Unhandled error', err);
   res.status(500).json({

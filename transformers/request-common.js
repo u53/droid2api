@@ -4,7 +4,7 @@ import { getSystemPrompt, getUserAgent, getModelReasoning } from '../config.js';
 export function transformToCommon(openaiRequest) {
   logDebug('Transforming OpenAI request to Common format');
   
-  // 基本保持 OpenAI 格式，只在 messages 前面插入 system 消息
+  // Mostly keep OpenAI format, just prepend system message to messages
   const commonRequest = {
     ...openaiRequest
   };
@@ -12,14 +12,13 @@ export function transformToCommon(openaiRequest) {
   const systemPrompt = getSystemPrompt();
   
   if (systemPrompt) {
-    // 检查是否已有 system 消息
+    // Check if there's already a system message
     const hasSystemMessage = commonRequest.messages?.some(m => m.role === 'system');
     
     if (hasSystemMessage) {
-      // 如果已有 system 消息，在第一个 system 消息前插入我们的 system prompt
+      // Prepend our system prompt to the first system message
       commonRequest.messages = commonRequest.messages.map((msg, index) => {
         if (msg.role === 'system' && index === commonRequest.messages.findIndex(m => m.role === 'system')) {
-          // 找到第一个 system 消息，前置我们的 prompt
           return {
             role: 'system',
             content: systemPrompt + (typeof msg.content === 'string' ? msg.content : '')
@@ -28,7 +27,7 @@ export function transformToCommon(openaiRequest) {
         return msg;
       });
     } else {
-      // 如果没有 system 消息，在 messages 数组最前面插入
+      // No system message found, prepend one at the beginning
       commonRequest.messages = [
         {
           role: 'system',

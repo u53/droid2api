@@ -99,7 +99,7 @@ export function transformToGoogle(openaiRequest) {
   // Handle reasoning/thinking config via thinkingLevel
   const reasoningLevel = getModelReasoning(openaiRequest.model);
   if (reasoningLevel === 'auto') {
-    // 保持原始请求的 thinkingConfig 不变
+    // Keep original request's thinkingConfig as-is
   } else if (reasoningLevel && ['low', 'medium', 'high'].includes(reasoningLevel)) {
     const levelMap = { 'low': 'LOW', 'medium': 'MEDIUM', 'high': 'HIGH' };
     if (!generationConfig.thinkingConfig) {
@@ -107,7 +107,7 @@ export function transformToGoogle(openaiRequest) {
     }
     generationConfig.thinkingConfig.thinkingLevel = levelMap[reasoningLevel];
   } else {
-    // off 或无效：移除 thinkingConfig
+    // Off or invalid: remove thinkingConfig
     delete generationConfig.thinkingConfig;
   }
 
