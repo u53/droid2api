@@ -20,6 +20,9 @@ let backgroundTimers = [];
 const cooldownMap = new Map();
 const COOLDOWN_MS = 3 * 1000; // 3 seconds
 
+// Async health check: track which accounts are currently being checked to avoid duplicate checks
+const pendingHealthChecks = new Set();
+
 // Round-robin: track last-used timestamp per account to spread concurrent requests
 // Map<accountId, lastUsedTimestamp>
 const lastUsedMap = new Map();
@@ -661,7 +664,16 @@ function isAccountCoolingDown(accountId) {
 
 /**
  * Report that a request using this bearer token returned a retryable error.
- * Puts the account in 30s cooldown so it's skipped for a while.
+ * Puts the account in a short cooldown so it's skipped temporarily.
+ *
+ * For status codes that may indicate account-level issues (401, 402, 403),
+ * an async health check is triggered in the background to determine the real cause:
+ *   - If quota is exhausted → mark as 'exhausted'
+ *   - If token is invalid / account banned → mark as 'error'
+ *   - If it was just a transient error → cooldown expires naturally, account recovers
+ *
+ * This avoids immediately disabling an account that might just have a temporary issue.
+ *
  * @param {string} bearerToken - "Bearer xxx"
  * @param {number} statusCode - HTTP status (401/402/403/429)
  * @param {string} reason - error description
@@ -674,7 +686,6 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
 
   const trimmedReason = (reason || '').substring(0, 200);
 
-  // 403 不再视为封禁，统一走冷却逻辑，调度器会自动尝试下一个账号
   const reasonMap = {
     401: '认证失败 (401)',
     402: '额度不足 (402)',
@@ -685,6 +696,7 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
   const displayReason = reasonMap[statusCode] || `HTTP ${statusCode}`;
   const fullReason = `${displayReason}: ${trimmedReason}`;
 
+  // 先进入短暂冷却，不影响主流程
   cooldownMap.set(account.id, {
     until: Date.now() + COOLDOWN_MS,
     reason: fullReason,
@@ -692,6 +704,84 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
   });
 
   logInfo(`[Cooldown] Account ${account.id} (${account.email || account.label || 'unknown'}) paused 3s: ${displayReason}`);
+
+  // 对可能是账号级别问题的错误码，异步检查真实状态（不阻塞主流程）
+  // 429 纯粹是限频，冷却到期自然恢复，无需检查
+  if ([401, 402, 403].includes(statusCode)) {
+    asyncAccountHealthCheck(account, statusCode, trimmedReason);
+  }
+}
+
+/**
+ * Async health check: determine if an account failure is due to
+ * quota exhaustion, account ban, or just a transient error.
+ *
+ * Runs in the background without blocking the main request flow.
+ * Uses pendingHealthChecks to prevent duplicate concurrent checks on the same account.
+ *
+ * @param {object} account - The account object
+ * @param {number} statusCode - The HTTP status that triggered this check
+ * @param {string} errorDetail - The error detail from the failed request
+ */
+function asyncAccountHealthCheck(account, statusCode, errorDetail) {
+  // 防止对同一账号重复发起健康检查
+  if (pendingHealthChecks.has(account.id)) {
+    logDebug(`[HealthCheck] Already checking account ${account.id}, skipping duplicate`);
+    return;
+  }
+
+  pendingHealthChecks.add(account.id);
+  logInfo(`[HealthCheck] Starting async health check for account ${account.id} (triggered by ${statusCode})`);
+
+  // 使用 Promise + catch，完全不阻塞调用方
+  (async () => {
+    try {
+      // Step 1: 尝试查询余额，判断 token 是否有效 & 额度是否耗尽
+      const balance = await checkAccountBalance(account);
+
+      // 余额检查成功 → token 有效，账号未封禁
+      // checkAccountBalance 内部已经处理了 exhausted 状态的设置
+      if (balance.usedRatio >= 0.95) {
+        logInfo(`[HealthCheck] Account ${account.id} confirmed exhausted (${(balance.usedRatio * 100).toFixed(1)}% used)`);
+      } else {
+        // 额度正常，说明之前的失败只是临时问题，冷却到期后自动恢复
+        logInfo(`[HealthCheck] Account ${account.id} is healthy (${(balance.usedRatio * 100).toFixed(1)}% used), was a transient error`);
+      }
+    } catch (error) {
+      // 余额检查也失败了 → 可能是 token 失效或账号被封
+      logError(`[HealthCheck] Balance check failed for account ${account.id}`, error);
+
+      if (statusCode === 401) {
+        // 401 + 余额查询也失败 → token 失效，尝试刷新
+        logInfo(`[HealthCheck] Account ${account.id} token may be invalid, attempting refresh...`);
+        try {
+          await refreshAccountToken(account);
+          logInfo(`[HealthCheck] Account ${account.id} token refreshed successfully, recovered`);
+        } catch (refreshError) {
+          // 刷新也失败 → 账号确实有问题，标记为 error
+          account.status = 'error';
+          account.error_message = `认证失败且刷新失败: ${refreshError.message}`;
+          saveAccounts();
+          logError(`[HealthCheck] Account ${account.id} marked as error: token refresh also failed`, refreshError);
+        }
+      } else if (statusCode === 402) {
+        // 402 + 余额查询也失败 → 额度问题，标记为 exhausted
+        account.status = 'exhausted';
+        account.error_message = `额度不足 (402)，余额查询也失败: ${error.message}`;
+        saveAccounts();
+        logInfo(`[HealthCheck] Account ${account.id} marked as exhausted (402 + balance check failed)`);
+      } else if (statusCode === 403) {
+        // 403 + 余额查询也失败 → 很可能是封号
+        account.status = 'error';
+        account.error_message = `疑似封号 (403)，余额查询也失败: ${error.message}`;
+        saveAccounts();
+        logError(`[HealthCheck] Account ${account.id} marked as error: suspected ban (403 + balance check failed)`);
+      }
+    } finally {
+      pendingHealthChecks.delete(account.id);
+      logDebug(`[HealthCheck] Finished health check for account ${account.id}`);
+    }
+  })();
 }
 
 // ────────────────────────────────────────

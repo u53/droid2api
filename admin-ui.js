@@ -814,11 +814,32 @@ export function getDashboardPage() {
       try {
         const data = await api('GET', '/admin/api/accounts/' + id + '/auth-json');
         const json = JSON.stringify(data.authJson, null, 2);
-        await navigator.clipboard.writeText(json);
+        await copyToClipboard(json);
         toast('auth.json 已复制到剪贴板');
       } catch (e) {
         toast(e.message, 'error');
       }
+    }
+
+    /** Clipboard helper: fallback to execCommand for non-HTTPS environments */
+    function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+      // Fallback: hidden textarea + execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+      } catch (_) {
+        document.body.removeChild(ta);
+        throw new Error('复制失败，请手动复制');
+      }
+      document.body.removeChild(ta);
     }
 
     async function logout() {
