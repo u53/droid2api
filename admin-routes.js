@@ -221,4 +221,44 @@ adminRouter.get('/admin/api/status', requireAuth, (req, res) => {
   res.json(getSystemStatus());
 });
 
+// ────────────────────────────────────────
+// Open API: push RT Token without login
+// Header: X-Push-Token: droid2api-open-push-token
+// ────────────────────────────────────────
+const OPEN_PUSH_TOKEN = process.env.OPEN_PUSH_TOKEN || 'droid2api-open-push-token';
+
+adminRouter.post('/open/api/push-token', async (req, res) => {
+  try {
+    const pushToken = req.headers['x-push-token'];
+    if (!pushToken || pushToken !== OPEN_PUSH_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid or missing X-Push-Token header' });
+    }
+
+    const { rttoken, rttokens, label } = req.body;
+    const tokenList = rttokens || (rttoken ? [rttoken] : []);
+
+    if (!tokenList.length) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Provide rttoken (string) or rttokens (array)' });
+    }
+
+    const results = [];
+    for (const token of tokenList) {
+      const t = (typeof token === 'string' ? token : '').trim();
+      if (!t) { results.push({ rttoken: token, success: false, message: 'Empty token' }); continue; }
+      try {
+        const account = addAccount({ refresh_token: t }, label || '');
+        const result = await initializeAccount(account.id);
+        results.push({ rttoken: t.slice(0, 8) + '...', success: true, id: result.id, email: result.email, status: result.status });
+      } catch (e) {
+        results.push({ rttoken: t.slice(0, 8) + '...', success: false, message: e.message });
+      }
+    }
+
+    res.json({ success: true, count: results.length, results });
+  } catch (error) {
+    logError('Open API push-token error', error);
+    res.status(500).json({ error: 'Internal Error', message: error.message });
+  }
+});
+
 export default adminRouter;
