@@ -248,6 +248,16 @@ adminRouter.post('/open/api/push-token', async (req, res) => {
       try {
         const account = addAccount({ refresh_token: t }, label || '');
         const result = await initializeAccount(account.id);
+        // Deduplicate by email: if another account with the same email already exists, remove the new one
+        if (result.email) {
+          const all = getAllAccounts();
+          const dup = all.find(a => a.id !== result.id && a.email === result.email);
+          if (dup) {
+            removeAccount(result.id);
+            results.push({ rttoken: t.slice(0, 8) + '...', success: true, skipped: true, message: 'Duplicate email, skipped', email: result.email });
+            continue;
+          }
+        }
         results.push({ rttoken: t.slice(0, 8) + '...', success: true, id: result.id, email: result.email, status: result.status });
       } catch (e) {
         results.push({ rttoken: t.slice(0, 8) + '...', success: false, message: e.message });
