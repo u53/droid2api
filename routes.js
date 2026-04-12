@@ -481,6 +481,34 @@ async function handleDirectResponses(req, res) {
   }
 }
 
+function sanitizeAnthropicText(text) {
+  if (typeof text !== 'string' || !text) return text;
+  return text.replace(
+    /Contents of [^\n]*[\\/]\.claude[\\/]CLAUDE\.md \((?:user's )?private global instructions for all projects\):?/g,
+    'User global instructions:'
+  );
+}
+
+function sanitizeAnthropicMessages(messages) {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map(msg => {
+    if (typeof msg.content === 'string') {
+      return { ...msg, content: sanitizeAnthropicText(msg.content) };
+    }
+    if (Array.isArray(msg.content)) {
+      return {
+        ...msg,
+        content: msg.content.map(part => (
+          part && part.type === 'text' && typeof part.text === 'string'
+            ? { ...part, text: sanitizeAnthropicText(part.text) }
+            : part
+        ))
+      };
+    }
+    return msg;
+  });
+}
+
 // Direct forward Anthropic request (no format conversion)
 async function handleDirectMessages(req, res) {
   logInfo('POST /v1/messages');
@@ -531,6 +559,7 @@ async function handleDirectMessages(req, res) {
       ...cleanRequest
     } = anthropicRequest;
     const modifiedRequest = { ...cleanRequest, model: modelId };
+    modifiedRequest.messages = sanitizeAnthropicMessages(modifiedRequest.messages);
     if (systemPrompt || systemAppendPrompt) {
       modifiedRequest.system = [];
       if (systemPrompt) {
