@@ -19,7 +19,8 @@ import {
   refreshTokenById,
   refreshAllTokens,
   getSystemStatus,
-  getAccountAuthJson
+  getAccountAuthJson,
+  clearExhaustedAccounts
 } from './account-manager.js';
 import { getLoginPage, getDashboardPage } from './admin-ui.js';
 import { logError } from './logger.js';
@@ -201,6 +202,17 @@ adminRouter.get('/admin/api/accounts/:id/auth-json', requireAuth, (req, res) => 
   } catch (error) {
     logError('Get auth json error', error);
     res.status(404).json({ error: 'Not Found', message: error.message });
+  }
+});
+
+// Clear all exhausted accounts
+adminRouter.post('/admin/api/clear-exhausted', requireAuth, async (req, res) => {
+  try {
+    const result = await clearExhaustedAccounts();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logError('Clear exhausted accounts error', error);
+    res.status(500).json({ error: 'Error', message: error.message });
   }
 });
 

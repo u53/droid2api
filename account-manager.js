@@ -366,6 +366,37 @@ export function removeAccount(id) {
 }
 
 /**
+ * Remove all accounts with 'exhausted' status
+ * Uses bulk lock to prevent concurrent modifications
+ * @returns {{ removed: number, ids: string[] }}
+ */
+export async function clearExhaustedAccounts() {
+  const releaseBulkLock = await acquireBulkLock('clearExhaustedAccounts');
+  try {
+    const exhausted = accounts.filter(a => a.status === 'exhausted');
+    if (exhausted.length === 0) {
+      return { removed: 0, ids: [] };
+    }
+
+    const removedIds = exhausted.map(a => a.id);
+    const removedInfo = exhausted.map(a => `${a.id} (${a.email || a.label || 'unknown'})`);
+
+    // 从数组中移除（倒序，防止索引偏移）
+    for (let i = accounts.length - 1; i >= 0; i--) {
+      if (accounts[i].status === 'exhausted') {
+        accounts.splice(i, 1);
+      }
+    }
+
+    saveAccountsSync(); // 关键操作：立即写盘
+    logInfo(`[ClearExhausted] Removed ${removedIds.length} exhausted accounts: ${removedInfo.join(', ')}`);
+    return { removed: removedIds.length, ids: removedIds };
+  } finally {
+    releaseBulkLock();
+  }
+}
+
+/**
  * Update account fields (label, status)
  */
 export function updateAccount(id, updates) {
@@ -751,31 +782,58 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
       // 余额检查也失败了 → 可能是 token 失效或账号被封
       logError(`[HealthCheck] Balance check failed for account ${account.id}`, error);
 
+      // 401 特殊处理：需要尝试刷新 token，refreshAccountToken 内部有自己的锁
       if (statusCode === 401) {
-        // 401 + 余额查询也失败 → token 失效，尝试刷新
         logInfo(`[HealthCheck] Account ${account.id} token may be invalid, attempting refresh...`);
         try {
           await refreshAccountToken(account);
           logInfo(`[HealthCheck] Account ${account.id} token refreshed successfully, recovered`);
         } catch (refreshError) {
-          // 刷新也失败 → 账号确实有问题，标记为 error
-          account.status = 'error';
-          account.error_message = `认证失败且刷新失败: ${refreshError.message}`;
-          saveAccounts();
-          logError(`[HealthCheck] Account ${account.id} marked as error: token refresh also failed`, refreshError);
+          // 刷新也失败 → 加锁标记为 error
+          const releaseAccountLock = await acquireAccountLock(account.id);
+          try {
+            if (accounts.includes(account) && account.status !== 'disabled') {
+              account.status = 'error';
+              account.error_message = `认证失败且刷新失败: ${refreshError.message}`;
+              saveAccountsSync();
+              logError(`[HealthCheck] Account ${account.id} marked as error: token refresh also failed`, refreshError);
+            }
+          } finally {
+            releaseAccountLock();
+          }
         }
-      } else if (statusCode === 402) {
-        // 402 + 余额查询也失败 → 额度问题，标记为 exhausted
-        account.status = 'exhausted';
-        account.error_message = `额度不足 (402)，余额查询也失败: ${error.message}`;
-        saveAccounts();
-        logInfo(`[HealthCheck] Account ${account.id} marked as exhausted (402 + balance check failed)`);
-      } else if (statusCode === 403) {
-        // 403 + 余额查询也失败 → 很可能是封号
-        account.status = 'error';
-        account.error_message = `疑似封号 (403)，余额查询也失败: ${error.message}`;
-        saveAccounts();
-        logError(`[HealthCheck] Account ${account.id} marked as error: suspected ban (403 + balance check failed)`);
+        return;
+      }
+
+      // 402/403: 加锁修改状态，防止与其他操作竞态
+      const releaseAccountLock = await acquireAccountLock(account.id);
+      try {
+        // 检查账号是否在健康检查期间已被删除或手动处理
+        if (!accounts.includes(account)) {
+          logInfo(`[HealthCheck] Account ${account.id} was removed during check, skipping status update`);
+          return;
+        }
+        // 如果管理员已手动处理（比如禁用），不再覆盖
+        if (account.status === 'disabled') {
+          logInfo(`[HealthCheck] Account ${account.id} was manually disabled, skipping status update`);
+          return;
+        }
+
+        if (statusCode === 402) {
+          // 402 + 余额查询也失败 → 额度问题，标记为 exhausted
+          account.status = 'exhausted';
+          account.error_message = `额度不足 (402)，余额查询也失败: ${error.message}`;
+          saveAccountsSync();
+          logInfo(`[HealthCheck] Account ${account.id} marked as exhausted (402 + balance check failed)`);
+        } else if (statusCode === 403) {
+          // 403 + 余额查询也失败 → 很可能是封号
+          account.status = 'error';
+          account.error_message = `疑似封号 (403)，余额查询也失败: ${error.message}`;
+          saveAccountsSync();
+          logError(`[HealthCheck] Account ${account.id} marked as error: suspected ban (403 + balance check failed)`);
+        }
+      } finally {
+        releaseAccountLock();
       }
     } finally {
       pendingHealthChecks.delete(account.id);

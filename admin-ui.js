@@ -417,6 +417,7 @@ export function getDashboardPage() {
         <button class="btn btn-primary" onclick="showAddModal()">+ 添加账号</button>
         <button class="btn btn-secondary" onclick="checkAllBalances()" id="btnCheckAll">查询全部额度</button>
         <button class="btn btn-secondary" onclick="refreshAllTokens()" id="btnRefreshAll">刷新全部Token</button>
+        <button class="btn btn-secondary" onclick="clearExhausted()" id="btnClearExhausted" style="color:#f97316;border-color:#f97316">清除耗尽账号</button>
       </div>
       <button class="btn btn-secondary btn-sm" onclick="loadAccounts()">刷新列表</button>
     </div>
@@ -805,6 +806,23 @@ export function getDashboardPage() {
         const data = await api('POST', '/admin/api/refresh-all-tokens');
         const failed = data.results.filter(r => !r.success).length;
         toast(failed ? failed + ' 个失败，其余已刷新' : '所有Token已刷新');
+        loadAccounts();
+      } catch (e) { toast(e.message, 'error'); }
+      finally { btn.disabled = false; }
+    }
+
+    async function clearExhausted() {
+      const count = document.getElementById('statExhausted')?.textContent || '0';
+      if (count === '0') {
+        toast('没有额度耗尽的账号', 'error');
+        return;
+      }
+      if (!confirm('确认清除所有额度耗尽的账号？此操作不可撤销！')) return;
+      const btn = document.getElementById('btnClearExhausted');
+      btn.disabled = true;
+      try {
+        const data = await api('POST', '/admin/api/clear-exhausted');
+        toast('已清除 ' + data.removed + ' 个耗尽账号');
         loadAccounts();
       } catch (e) { toast(e.message, 'error'); }
       finally { btn.disabled = false; }
