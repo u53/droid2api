@@ -492,7 +492,7 @@ async function handleDirectResponses(req, res) {
 function sanitizeAnthropicText(text) {
   if (typeof text !== 'string' || !text) return text;
   return text.replace(
-    /Contents of [^\n]*[\\/]\.claude[\\/]CLAUDE\.md \((?:user's )?private global instructions for all projects\):?/g,
+    /Contents of [^\n]*[\\/]\.claude(?:[\\/][^\n]+?\.md) \((?:user's )?private global instructions for all projects\):?/g,
     'User global instructions:'
   );
 }
