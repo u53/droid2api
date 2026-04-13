@@ -355,6 +355,16 @@ export async function initializeAccount(id) {
 }
 
 /**
+ * Clean up in-memory state for a removed account
+ */
+function cleanupAccountMemory(id) {
+  accountLockMap.delete(id);
+  rateLimitCooldownMap.delete(id);
+  lastUsedMap.delete(id);
+  pendingHealthChecks.delete(id);
+}
+
+/**
  * Remove account by ID
  */
 export function removeAccount(id) {
@@ -363,6 +373,7 @@ export function removeAccount(id) {
     throw new Error(`Account not found: ${id}`);
   }
   const removed = accounts.splice(idx, 1)[0];
+  cleanupAccountMemory(id);
   saveAccountsSync(); // Critical: write immediately, skip debounce
   logInfo(`Removed account: ${id} (${removed.email || 'no email'})`);
   return removed;
@@ -387,6 +398,7 @@ export async function clearExhaustedAccounts() {
     // Remove from array (reverse order to prevent index shift)
     for (let i = accounts.length - 1; i >= 0; i--) {
       if (accounts[i].status === 'exhausted') {
+        cleanupAccountMemory(accounts[i].id);
         accounts.splice(i, 1);
       }
     }
@@ -775,6 +787,14 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
   pendingHealthChecks.add(account.id);
   logInfo(`[HealthCheck] Starting async health check for account ${account.id} (triggered by ${statusCode})`);
 
+  // Safety timeout: force-clean pendingHealthChecks if check hangs
+  const healthCheckTimeout = setTimeout(() => {
+    if (pendingHealthChecks.has(account.id)) {
+      pendingHealthChecks.delete(account.id);
+      logError(`[HealthCheck] Account ${account.id} health check timed out (30s), force-cleaned`);
+    }
+  }, 30_000);
+
   // Use Promise + catch to avoid blocking the caller
   (async () => {
     try {
@@ -847,6 +867,7 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
         releaseAccountLock();
       }
     } finally {
+      clearTimeout(healthCheckTimeout);
       pendingHealthChecks.delete(account.id);
       logDebug(`[HealthCheck] Finished health check for account ${account.id}`);
     }
