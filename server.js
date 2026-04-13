@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import { loadConfig, isDevMode, getPort } from './config.js';
 import { logInfo, logError } from './logger.js';
 import router from './routes.js';
@@ -8,6 +9,12 @@ import { initAccountManager, startBackgroundTasks, stopBackgroundTasks } from '.
 import adminRouter from './admin-routes.js';
 
 const app = express();
+
+// gzip/deflate/br 压缩所有响应，节省下行带宽
+app.use(compression({
+  threshold: 512,       // 小于 512B 不压缩
+  level: 6,             // zlib 压缩级别 (1=快 9=小, 6=平衡)
+}));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
