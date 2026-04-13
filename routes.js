@@ -16,7 +16,9 @@ import { getNextProxyAgent, reportProxyFailure } from './proxy-manager.js';
 const router = express.Router();
 
 // Status codes that trigger account rotation retry
-const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
+// 403 not retried: usually content rejection, switching accounts won't help.
+// Async health check still runs to detect account bans.
+const RETRYABLE_STATUSES = new Set([401, 402, 429]);
 
 // Status codes that indicate proxy-level failures
 const PROXY_ERROR_STATUSES = new Set([502, 503, 504]);
@@ -35,10 +37,6 @@ function fetchWithTimeout(url, options, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { ...options, signal: controller.signal })
     .finally(() => clearTimeout(timer));
-}
-
-function isForbiddenError(status, detail) {
-  return status === 403 && /forbidden/i.test(detail || '');
 }
 
 /**
@@ -254,10 +252,6 @@ async function handleChatCompletions(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
-        if (isForbiddenError(response.status, lastErrorText)) {
-          log403('POST', endpoint.base_url, headers, transformedRequest, lastErrorText);
-          break;
-        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
@@ -265,7 +259,7 @@ async function handleChatCompletions(req, res) {
 
       // Non-retryable error or last attempt
       const errorText = lastErrorText || await response.text();
-      if (useRetry && isForbiddenError(response.status, errorText)) {
+      if (useRetry && response.status === 403) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
@@ -468,17 +462,13 @@ async function handleDirectResponses(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
-        if (isForbiddenError(response.status, lastErrorText)) {
-          log403('POST', endpoint.base_url, headers, modifiedRequest, lastErrorText);
-          break;
-        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
       }
 
       const errorText = lastErrorText || await response.text();
-      if (useRetry && isForbiddenError(response.status, errorText)) {
+      if (useRetry && response.status === 403) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
@@ -678,17 +668,13 @@ async function handleDirectMessages(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
-        if (isForbiddenError(response.status, lastErrorText)) {
-          log403('POST', endpoint.base_url, headers, modifiedRequest, lastErrorText);
-          break;
-        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
       }
 
       const errorText = lastErrorText || await response.text();
-      if (useRetry && isForbiddenError(response.status, errorText)) {
+      if (useRetry && response.status === 403) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
@@ -843,10 +829,6 @@ async function handleCountTokens(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
-        if (isForbiddenError(response.status, lastErrorText)) {
-          log403('POST', countTokensUrl, headers, modifiedRequest, lastErrorText);
-          break;
-        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
@@ -988,17 +970,13 @@ async function handleDirectGenerate(req, res) {
         lastErrorText = await response.text();
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
-        if (isForbiddenError(response.status, lastErrorText)) {
-          log403('POST', endpoint.base_url, headers, modifiedRequest, lastErrorText);
-          break;
-        }
         triedTokens.push(authHeader);
         logInfo(`[Retry] ${response.status} on attempt ${attempt + 1}, switching account...`);
         continue;
       }
 
       const errorText = lastErrorText || await response.text();
-      if (useRetry && isForbiddenError(response.status, errorText)) {
+      if (useRetry && response.status === 403) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
