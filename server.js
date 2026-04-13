@@ -10,10 +10,17 @@ import adminRouter from './admin-routes.js';
 
 const app = express();
 
-// gzip/deflate/br 压缩所有响应，节省下行带宽
+// gzip/deflate/br 压缩响应，节省下行带宽（跳过 SSE 流式响应）
 app.use(compression({
   threshold: 512,       // 小于 512B 不压缩
   level: 6,             // zlib 压缩级别 (1=快 9=小, 6=平衡)
+  filter: (req, res) => {
+    // SSE 流式响应不压缩，避免 chunk 被缓冲导致客户端无法实时接收
+    if (res.getHeader('Content-Type')?.includes('text/event-stream')) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
 }));
 
 app.use(express.json({ limit: '50mb' }));
