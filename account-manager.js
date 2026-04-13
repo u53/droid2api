@@ -16,9 +16,11 @@ let accounts = [];
 let dataVersion = 1;
 let backgroundTimers = [];
 
-// Cooldown: Map<accountId, { until: timestamp, reason: string, statusCode: number }>
-const cooldownMap = new Map();
-const COOLDOWN_MS = 3 * 1000; // 3 seconds
+// Cooldown removed: async health check handles real account issues (exhausted/banned/error).
+// Cooldown was causing cascading failures under high concurrency — all accounts cooling down
+// simultaneously led to "All available accounts are in cooldown" errors, request backlog, and
+// bandwidth explosion on streaming connections.
+// Old code: cooldownMap with 3s cooldown per account on 401/402/403/429.
 
 // Async health check: track which accounts are currently being checked to avoid duplicate checks
 const pendingHealthChecks = new Set();
@@ -173,10 +175,7 @@ export function hasAccounts() {
  * Get all accounts (sanitized for API responses)
  */
 export function getAllAccounts() {
-  const now = Date.now();
   return accounts.map(a => {
-    const cd = cooldownMap.get(a.id);
-    const cooldown = (cd && cd.until > now) ? { until: cd.until, reason: cd.reason } : null;
     return {
       id: a.id,
       type: a.type || 'auth_json',
@@ -188,7 +187,7 @@ export function getAllAccounts() {
       created_at: a.created_at,
       last_refresh: a.last_refresh,
       exp: a.exp,
-      cooldown
+      cooldown: null
     };
   });
 }
@@ -698,33 +697,20 @@ export async function checkAllBalances() {
 }
 
 // ────────────────────────────────────────
-// Cooldown / Failure Reporting
+// Failure Reporting (no cooldown — async health check handles real issues)
 // ────────────────────────────────────────
 
 /**
- * Check if an account is in cooldown
- */
-function isAccountCoolingDown(accountId) {
-  const cd = cooldownMap.get(accountId);
-  if (!cd) return false;
-  if (Date.now() >= cd.until) {
-    cooldownMap.delete(accountId);
-    return false;
-  }
-  return true;
-}
-
-/**
  * Report that a request using this bearer token returned a retryable error.
- * Puts the account in a short cooldown so it's skipped temporarily.
  *
- * For status codes that may indicate account-level issues (401, 402, 403),
- * an async health check is triggered in the background to determine the real cause:
+ * No cooldown is applied. The retry loop in routes.js uses excludeTokens to avoid
+ * re-picking the same account within one request. For account-level issues (401/402/403),
+ * an async health check runs in the background to determine the real cause:
  *   - If quota is exhausted → mark as 'exhausted'
  *   - If token is invalid / account banned → mark as 'error'
- *   - If it was just a transient error → cooldown expires naturally, account recovers
+ *   - If it was just a transient error → account stays active, next request can use it
  *
- * This avoids immediately disabling an account that might just have a temporary issue.
+ * 429 is purely rate limiting and transient — no health check needed, account stays active.
  *
  * @param {string} bearerToken - "Bearer xxx"
  * @param {number} statusCode - HTTP status (401/402/403/429)
@@ -746,19 +732,11 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
   };
 
   const displayReason = reasonMap[statusCode] || `HTTP ${statusCode}`;
-  const fullReason = `${displayReason}: ${trimmedReason}`;
 
-  // Enter short cooldown without blocking the main flow
-  cooldownMap.set(account.id, {
-    until: Date.now() + COOLDOWN_MS,
-    reason: fullReason,
-    statusCode
-  });
-
-  logInfo(`[Cooldown] Account ${account.id} (${account.email || account.label || 'unknown'}) paused 3s: ${displayReason}`);
+  logInfo(`[Failure] Account ${account.id} (${account.email || account.label || 'unknown'}): ${displayReason}`);
 
   // For status codes that may indicate account-level issues, async check real status (non-blocking)
-  // 429 is purely rate limiting, recovers naturally after cooldown
+  // 429 is purely rate limiting, recovers naturally — no health check needed
   if ([401, 402, 403].includes(statusCode)) {
     asyncAccountHealthCheck(account, statusCode, trimmedReason);
   }
@@ -796,7 +774,7 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
       if (balance.usedRatio >= 1.0) {
         logInfo(`[HealthCheck] Account ${account.id} confirmed exhausted (${(balance.usedRatio * 100).toFixed(1)}% used)`);
       } else {
-        // Quota normal, previous failure was transient, will auto-recover after cooldown
+        // Quota normal, previous failure was transient — account stays active
         logInfo(`[HealthCheck] Account ${account.id} is healthy (${(balance.usedRatio * 100).toFixed(1)}% used), was a transient error`);
       }
     } catch (error) {
@@ -886,27 +864,25 @@ export function getActiveAccountCount() {
  *     request never pick the same account twice.
  *   - lastUsedMap ensures concurrent requests arriving at the same time are
  *     distributed across different accounts (round-robin effect).
- *   - cooldownMap is updated synchronously on failure report and immediately
- *     visible to all subsequent getNextApiKey calls (single-threaded Node.js).
+ *   - Failure reporting triggers async health check which sets account status
+ *     (exhausted/error) — visible to all subsequent getNextApiKey calls (single-threaded Node.js).
  *   - Exhausted accounts are auto-removed by asyncAccountHealthCheck and
  *     backgroundCheckBalances, keeping the account pool clean.
+ *
+ * Note: This function is synchronous (pure memory operations). No network IO.
+ * Token refresh is handled entirely by background tasks.
  */
-export async function getNextApiKey(excludeTokens = []) {
+export function getNextApiKey(excludeTokens = []) {
   const excludeSet = new Set(excludeTokens.map(t => t.replace(/^Bearer\s+/i, '')));
 
-  // 1. Filter: active, not cooled-down, not excluded
+  // 1. Filter: active, not excluded
   const active = accounts.filter(a => {
     if (a.status !== 'active') return false;
-    if (isAccountCoolingDown(a.id)) return false;
     if (excludeSet.has(a.access_token)) return false;
     return true;
   });
 
   if (active.length === 0) {
-    const coolingDown = accounts.filter(a => a.status === 'active' && isAccountCoolingDown(a.id));
-    if (coolingDown.length > 0) {
-      throw new Error(`All available accounts are in cooldown (${coolingDown.length}), please retry later`);
-    }
     throw new Error('No active accounts available');
   }
 
@@ -939,37 +915,28 @@ export async function getNextApiKey(excludeTokens = []) {
     return ratioB - ratioA; // higher usage first — exhaust and clean up
   });
 
-  // 5. Try accounts in order
+  // 5. Pick first account with a valid token (pure memory, no network IO)
+  const now = Date.now();
   for (const account of usable) {
-    try {
-      if (account.type === 'apikey') {
-        if (!account.access_token) continue;
-        lastUsedMap.set(account.id, Date.now());
-        logDebug(`Scheduled apikey account: ${account.id} (${account.label || 'no label'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
-        return `Bearer ${account.access_token}`;
-      }
-
-      // auth_json: check expiry
-      const now = Date.now();
-      const tokenExpired = account.exp && account.exp < now + 30 * 60 * 1000;
-      const noToken = !account.access_token;
-
-      if (tokenExpired || noToken) {
-        if (account.refresh_token) {
-          logInfo(`Token expired/missing for ${account.id}, refreshing...`);
-          await refreshAccountToken(account);
-        } else {
-          continue;
-        }
-      }
-
+    if (account.type === 'apikey') {
+      if (!account.access_token) continue;
       lastUsedMap.set(account.id, Date.now());
-      logDebug(`Scheduled account: ${account.id} (${account.email || 'no email'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
+      logDebug(`Scheduled apikey account: ${account.id} (${account.label || 'no label'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
       return `Bearer ${account.access_token}`;
-    } catch (error) {
-      logError(`Failed to use account ${account.id}, trying next`, error);
+    }
+
+    // auth_json: skip if token expired or missing — background task will refresh it
+    const tokenExpired = account.exp && account.exp < now + 5 * 60 * 1000; // 5min buffer
+    const noToken = !account.access_token;
+
+    if (tokenExpired || noToken) {
+      logDebug(`Skipping account ${account.id}: token ${noToken ? 'missing' : 'expired'}, waiting for background refresh`);
       continue;
     }
+
+    lastUsedMap.set(account.id, Date.now());
+    logDebug(`Scheduled account: ${account.id} (${account.email || 'no email'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
+    return `Bearer ${account.access_token}`;
   }
 
   throw new Error('All accounts failed to provide a valid API key');
@@ -980,13 +947,19 @@ export async function getNextApiKey(excludeTokens = []) {
 // ────────────────────────────────────────
 
 /**
- * Background: refresh tokens that are about to expire (< 2 hours remaining)
+ * Background: refresh tokens that are about to expire (< 1 hour remaining),
+ * never refreshed, or missing access_token entirely.
+ * Runs every 10 minutes. getNextApiKey skips tokens expiring within 5 minutes,
+ * so we refresh well ahead to keep the pool ready.
  */
 async function backgroundRefreshTokens() {
   const releaseBulkLock = await acquireBulkLock('backgroundRefreshTokens');
   try {
     const now = Date.now();
-    const twoHoursMs = 2 * 60 * 60 * 1000;
+    // Refresh tokens expiring within 1 hour.
+    // getNextApiKey skips tokens expiring within 5 minutes, so we refresh well ahead
+    // to ensure tokens are always fresh when the scheduler picks them.
+    const oneHourMs = 1 * 60 * 60 * 1000;
 
     const snapshot = [...accounts];
     for (const account of snapshot) {
@@ -995,10 +968,11 @@ async function backgroundRefreshTokens() {
       if (!account.refresh_token) continue;
       if (!accounts.includes(account)) continue;
 
-      const tokenExpiringSoon = account.exp && (account.exp - now) < twoHoursMs;
+      const tokenExpiringSoon = account.exp && (account.exp - now) < oneHourMs;
       const neverRefreshed = !account.last_refresh;
+      const noToken = !account.access_token;
 
-      if (tokenExpiringSoon || neverRefreshed) {
+      if (tokenExpiringSoon || neverRefreshed || noToken) {
         try {
           await refreshAccountToken(account);
         } catch (error) {
@@ -1047,13 +1021,14 @@ async function backgroundCheckBalances() {
  * Start background tasks
  */
 export function startBackgroundTasks() {
-  // Refresh tokens every 30 minutes
-  const refreshTimer = setInterval(backgroundRefreshTokens, 30 * 60 * 1000);
+  // Refresh tokens every 10 minutes (getNextApiKey no longer refreshes inline,
+  // so background must keep tokens fresh proactively)
+  const refreshTimer = setInterval(backgroundRefreshTokens, 10 * 60 * 1000);
   // Check balances every 15 minutes
   const balanceTimer = setInterval(backgroundCheckBalances, 15 * 60 * 1000);
 
   backgroundTimers.push(refreshTimer, balanceTimer);
-  logInfo('Background tasks started (token refresh: 30min, balance check: 15min)');
+  logInfo('Background tasks started (token refresh: 10min, balance check: 15min)');
 
   // Run initial check after a short delay (10 seconds)
   setTimeout(async () => {

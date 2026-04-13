@@ -315,7 +315,7 @@ export async function getApiKey(clientAuthorization = null, excludeTokens = []) 
 }
 
 /**
- * Report API key failure (delegates to account-manager for cooldown)
+ * Report API key failure (delegates to account-manager for async health check)
  */
 export function reportApiKeyFailure(bearerToken, statusCode, reason) {
   if (hasAccounts()) {

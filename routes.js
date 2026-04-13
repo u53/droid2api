@@ -22,6 +22,21 @@ const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
 const PROXY_ERROR_STATUSES = new Set([502, 503, 504]);
 const MAX_RETRY_ACCOUNTS = 3;
 
+// Upstream fetch timeout: max wait for response headers (first byte).
+// Does NOT limit streaming duration — only how long we wait for the upstream to start responding.
+const UPSTREAM_TIMEOUT_MS = 120 * 1000; // 120 seconds
+
+/**
+ * Wrap fetch with an AbortController timeout for first-byte response.
+ * Returns the fetch response; throws on timeout or network error.
+ */
+function fetchWithTimeout(url, options, timeoutMs = UPSTREAM_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
 function isForbiddenError(status, detail) {
   return status === 403 && /forbidden/i.test(detail || '');
 }
@@ -188,6 +203,12 @@ async function handleChatCompletions(req, res) {
 
     const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Abort retry if client already disconnected
+      if (req.socket.destroyed) {
+        logInfo(`[Retry] Client disconnected before attempt ${attempt + 1}, aborting`);
+        return;
+      }
+
       let authHeader;
       try {
         authHeader = await getApiKey(req.headers.authorization, triedTokens);
@@ -215,7 +236,7 @@ async function handleChatCompletions(req, res) {
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
       try {
-        response = await fetch(endpoint.base_url, fetchOptions);
+        response = await fetchWithTimeout(endpoint.base_url, fetchOptions);
       } catch (networkError) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
@@ -270,13 +291,18 @@ async function handleChatCompletions(req, res) {
       if (model.type === 'common') {
         try {
           for await (const chunk of response.body) {
+            if (req.socket.destroyed) {
+              logInfo('Client disconnected during stream, destroying upstream');
+              response.body.destroy();
+              return;
+            }
             res.write(chunk);
           }
           res.end();
           logInfo('Stream forwarded (common type)');
         } catch (streamError) {
           logError('Stream error', streamError);
-          res.end();
+          if (!res.writableEnded) res.end();
         }
       } else {
         // Anthropic, OpenAI, and Google types use transformer
@@ -291,13 +317,18 @@ async function handleChatCompletions(req, res) {
 
         try {
           for await (const chunk of transformer.transformStream(response.body)) {
+            if (req.socket.destroyed) {
+              logInfo('Client disconnected during stream, destroying upstream');
+              response.body.destroy();
+              return;
+            }
             res.write(chunk);
           }
           res.end();
           logInfo('Stream completed');
         } catch (streamError) {
           logError('Stream error', streamError);
-          res.end();
+          if (!res.writableEnded) res.end();
         }
       }
     } else {
@@ -397,6 +428,12 @@ async function handleDirectResponses(req, res) {
 
     const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Abort retry if client already disconnected
+      if (req.socket.destroyed) {
+        logInfo(`[Retry] Client disconnected before attempt ${attempt + 1}, aborting`);
+        return;
+      }
+
       let authHeader;
       try {
         authHeader = await getApiKey(clientAuth, triedTokens);
@@ -414,7 +451,7 @@ async function handleDirectResponses(req, res) {
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
       try {
-        response = await fetch(endpoint.base_url, fetchOptions);
+        response = await fetchWithTimeout(endpoint.base_url, fetchOptions);
       } catch (networkError) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
@@ -464,15 +501,20 @@ async function handleDirectResponses(req, res) {
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        // Forward raw response stream to client
+        // Forward raw response stream to client, abort if client disconnects
         for await (const chunk of response.body) {
+          if (req.socket.destroyed) {
+            logInfo('Client disconnected during stream, destroying upstream');
+            response.body.destroy();
+            return;
+          }
           res.write(chunk);
         }
         res.end();
         logDebug('Stream forwarded successfully');
       } catch (streamError) {
         logError('Stream error', streamError);
-        res.end();
+        if (!res.writableEnded) res.end();
       }
     } else {
       // Forward non-streaming response directly
@@ -596,6 +638,12 @@ async function handleDirectMessages(req, res) {
 
     const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Abort retry if client already disconnected (avoid wasting account quota)
+      if (req.socket.destroyed) {
+        logInfo(`[Retry] Client disconnected before attempt ${attempt + 1}, aborting`);
+        return;
+      }
+
       let authHeader;
       try {
         authHeader = await getApiKey(clientAuth, triedTokens);
@@ -613,7 +661,7 @@ async function handleDirectMessages(req, res) {
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
       try {
-        response = await fetch(endpoint.base_url, fetchOptions);
+        response = await fetchWithTimeout(endpoint.base_url, fetchOptions);
       } catch (networkError) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
@@ -661,15 +709,20 @@ async function handleDirectMessages(req, res) {
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        // Forward raw response stream to client
+        // Forward raw response stream to client, abort if client disconnects
         for await (const chunk of response.body) {
+          if (req.socket.destroyed) {
+            logInfo('Client disconnected during stream, destroying upstream');
+            response.body.destroy();
+            return;
+          }
           res.write(chunk);
         }
         res.end();
         logDebug('Stream forwarded successfully');
       } catch (streamError) {
         logError('Stream error', streamError);
-        res.end();
+        if (!res.writableEnded) res.end();
       }
     } else {
       // Forward non-streaming response directly
@@ -750,6 +803,12 @@ async function handleCountTokens(req, res) {
 
     const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Abort retry if client already disconnected
+      if (req.socket.destroyed) {
+        logInfo(`[Retry] Client disconnected before attempt ${attempt + 1}, aborting`);
+        return;
+      }
+
       let authHeader;
       try {
         authHeader = await getApiKey(clientAuth, triedTokens);
@@ -767,7 +826,7 @@ async function handleCountTokens(req, res) {
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
       try {
-        response = await fetch(countTokensUrl, fetchOptions);
+        response = await fetchWithTimeout(countTokensUrl, fetchOptions);
       } catch (networkError) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
@@ -889,6 +948,12 @@ async function handleDirectGenerate(req, res) {
 
     const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Abort retry if client already disconnected
+      if (req.socket.destroyed) {
+        logInfo(`[Retry] Client disconnected before attempt ${attempt + 1}, aborting`);
+        return;
+      }
+
       let authHeader;
       try {
         authHeader = await getApiKey(req.headers.authorization, triedTokens);
@@ -906,7 +971,7 @@ async function handleDirectGenerate(req, res) {
       if (proxyAgentInfo?.agent) fetchOptions.agent = proxyAgentInfo.agent;
 
       try {
-        response = await fetch(endpoint.base_url, fetchOptions);
+        response = await fetchWithTimeout(endpoint.base_url, fetchOptions);
       } catch (networkError) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
@@ -956,13 +1021,18 @@ async function handleDirectGenerate(req, res) {
 
       try {
         for await (const chunk of response.body) {
+          if (req.socket.destroyed) {
+            logInfo('Client disconnected during stream, destroying upstream');
+            response.body.destroy();
+            return;
+          }
           res.write(chunk);
         }
         res.end();
         logDebug('Stream forwarded successfully');
       } catch (streamError) {
         logError('Stream error', streamError);
-        res.end();
+        if (!res.writableEnded) res.end();
       }
     } else {
       const data = await response.json();
