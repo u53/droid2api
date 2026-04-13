@@ -20,7 +20,7 @@ const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
 
 // Status codes that indicate proxy-level failures
 const PROXY_ERROR_STATUSES = new Set([502, 503, 504]);
-const MAX_RETRY_ACCOUNTS = 5;
+const MAX_RETRY_ACCOUNTS = 3;
 
 function isForbiddenError(status, detail) {
   return status === 403 && /forbidden/i.test(detail || '');
