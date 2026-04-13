@@ -45,7 +45,7 @@ export function logRequest(method, url, headers = null, body = null) {
  * Log 403 errors — one concise line with response snippet
  */
 export function log403(method, url, headers = null, body = null, responseText = '') {
-  const snippet = (responseText || '').substring(0, 200);
+  const snippet = (responseText || '').substring(0, 100);
   console.error(`[403] ${method} ${url} — ${snippet}`);
 }
 
