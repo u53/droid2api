@@ -271,4 +271,28 @@ adminRouter.post('/open/api/push-token', async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────
+// Open API: get exhausted account emails
+// Header: X-Push-Token: droid2api-open-push-token
+// ────────────────────────────────────────
+adminRouter.get('/open/api/exhausted-emails', (req, res) => {
+  try {
+    const pushToken = req.headers['x-push-token'];
+    if (!pushToken || pushToken !== OPEN_PUSH_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid or missing X-Push-Token header' });
+    }
+
+    const all = getAllAccounts();
+    const exhausted = all
+      .filter(a => a.status === 'exhausted')
+      .map(a => a.email)
+      .filter(Boolean);
+
+    res.json({ success: true, count: exhausted.length, emails: exhausted });
+  } catch (error) {
+    logError('Open API exhausted-emails error', error);
+    res.status(500).json({ error: 'Internal Error', message: error.message });
+  }
+});
+
 export default adminRouter;

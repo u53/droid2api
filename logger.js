@@ -43,6 +43,24 @@ export function logRequest(method, url, headers = null, body = null) {
   }
 }
 
+/**
+ * Log full request details on 403 errors (always prints, independent of dev_mode)
+ */
+export function log403(method, url, headers = null, body = null, responseText = '') {
+  console.error(`\n${'!'.repeat(80)}`);
+  console.error(`[403 DEBUG] ${method} ${url}`);
+  if (headers) {
+    console.error('[REQ HEADERS]', JSON.stringify(headers, null, 2));
+  }
+  if (body) {
+    console.error('[REQ BODY]', JSON.stringify(body, null, 2));
+  }
+  if (responseText) {
+    console.error('[RESP BODY]', responseText);
+  }
+  console.error('!'.repeat(80) + '\n');
+}
+
 export function logResponse(status, headers = null, body = null) {
   if (isDevMode()) {
     console.log(`\n${'-'.repeat(80)}`);

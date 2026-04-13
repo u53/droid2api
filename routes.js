@@ -1,7 +1,7 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getSystemAppendPrompt, getModelReasoning, getRedirectedModelId, getModelProvider } from './config.js';
-import { logInfo, logDebug, logError, logRequest, logResponse } from './logger.js';
+import { logInfo, logDebug, logError, logRequest, logResponse, log403 } from './logger.js';
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
 import { transformToOpenAI, getOpenAIHeaders } from './transformers/request-openai.js';
 import { transformToCommon, getCommonHeaders } from './transformers/request-common.js';
@@ -233,6 +233,7 @@ async function handleChatCompletions(req, res) {
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
         if (isForbiddenError(response.status, lastErrorText)) {
+          log403('POST', endpoint.base_url, headers, transformedRequest, lastErrorText);
           break;
         }
         triedTokens.push(authHeader);
@@ -244,6 +245,9 @@ async function handleChatCompletions(req, res) {
       const errorText = lastErrorText || await response.text();
       if (useRetry && isForbiddenError(response.status, errorText)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
+      }
+      if (response.status === 403) {
+        log403('POST', endpoint.base_url, headers, transformedRequest, errorText);
       }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
@@ -427,6 +431,7 @@ async function handleDirectResponses(req, res) {
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
         if (isForbiddenError(response.status, lastErrorText)) {
+          log403('POST', endpoint.base_url, headers, modifiedRequest, lastErrorText);
           break;
         }
         triedTokens.push(authHeader);
@@ -437,6 +442,9 @@ async function handleDirectResponses(req, res) {
       const errorText = lastErrorText || await response.text();
       if (useRetry && isForbiddenError(response.status, errorText)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
+      }
+      if (response.status === 403) {
+        log403('POST', endpoint.base_url, headers, modifiedRequest, errorText);
       }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
@@ -622,6 +630,7 @@ async function handleDirectMessages(req, res) {
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
         if (isForbiddenError(response.status, lastErrorText)) {
+          log403('POST', endpoint.base_url, headers, modifiedRequest, lastErrorText);
           break;
         }
         triedTokens.push(authHeader);
@@ -632,6 +641,9 @@ async function handleDirectMessages(req, res) {
       const errorText = lastErrorText || await response.text();
       if (useRetry && isForbiddenError(response.status, errorText)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
+      }
+      if (response.status === 403) {
+        log403('POST', endpoint.base_url, headers, modifiedRequest, errorText);
       }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
@@ -772,6 +784,7 @@ async function handleCountTokens(req, res) {
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
         if (isForbiddenError(response.status, lastErrorText)) {
+          log403('POST', countTokensUrl, headers, modifiedRequest, lastErrorText);
           break;
         }
         triedTokens.push(authHeader);
@@ -780,6 +793,9 @@ async function handleCountTokens(req, res) {
       }
 
       const errorText = lastErrorText || await response.text();
+      if (response.status === 403) {
+        log403('POST', countTokensUrl, headers, modifiedRequest, errorText);
+      }
       logError(`Count tokens error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
     }
@@ -907,6 +923,7 @@ async function handleDirectGenerate(req, res) {
         lastErrorStatus = response.status;
         reportApiKeyFailure(authHeader, response.status, lastErrorText);
         if (isForbiddenError(response.status, lastErrorText)) {
+          log403('POST', endpoint.base_url, headers, modifiedRequest, lastErrorText);
           break;
         }
         triedTokens.push(authHeader);
@@ -917,6 +934,9 @@ async function handleDirectGenerate(req, res) {
       const errorText = lastErrorText || await response.text();
       if (useRetry && isForbiddenError(response.status, errorText)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
+      }
+      if (response.status === 403) {
+        log403('POST', endpoint.base_url, headers, modifiedRequest, errorText);
       }
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
       return res.status(response.status).json({ error: `Endpoint returned ${response.status}`, details: errorText });
