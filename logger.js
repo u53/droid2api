@@ -42,21 +42,11 @@ export function logRequest(method, url, headers = null, body = null) {
 }
 
 /**
- * Log full request details on 403 errors (always prints, independent of dev_mode)
+ * Log 403 errors — one concise line with response snippet
  */
 export function log403(method, url, headers = null, body = null, responseText = '') {
-  console.error(`\n${'!'.repeat(80)}`);
-  console.error(`[403 DEBUG] ${method} ${url}`);
-  if (headers) {
-    console.error('[REQ HEADERS]', JSON.stringify(headers, null, 2));
-  }
-  if (body) {
-    console.error('[REQ BODY]', JSON.stringify(body, null, 2));
-  }
-  if (responseText) {
-    console.error('[RESP BODY]', responseText);
-  }
-  console.error('!'.repeat(80) + '\n');
+  const snippet = (responseText || '').substring(0, 200);
+  console.error(`[403] ${method} ${url} — ${snippet}`);
 }
 
 export function logResponse(status, headers = null, body = null) {
