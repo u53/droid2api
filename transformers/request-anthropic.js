@@ -151,6 +151,16 @@ function isAllowedAnthropicBeta(betaValue) {
     && !betaValue.startsWith('redact-thinking-');
 }
 
+function getAnthropicVersion(clientHeaders = {}) {
+  const version = clientHeaders['anthropic-version']?.trim();
+
+  if (!version || version.startsWith('bedrock-')) {
+    return '2023-06-01';
+  }
+
+  return version;
+}
+
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
@@ -159,7 +169,7 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
   const headers = {
     'accept': 'application/json',
     'content-type': 'application/json',
-    'anthropic-version': clientHeaders['anthropic-version'] || '2023-06-01',
+    'anthropic-version': getAnthropicVersion(clientHeaders),
     'authorization': authHeader || '',
     'x-api-provider': provider,
     'x-factory-client': 'cli',
