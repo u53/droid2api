@@ -20,6 +20,7 @@ const RETRYABLE_STATUSES = new Set([401, 402, 403, 429]);
 
 // Status codes that indicate proxy-level failures
 const PROXY_ERROR_STATUSES = new Set([502, 503, 504]);
+const MAX_RETRY_ACCOUNTS = 5;
 
 function isForbiddenError(status, detail) {
   return status === 403 && /forbidden/i.test(detail || '');
@@ -185,7 +186,7 @@ async function handleChatCompletions(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
@@ -394,7 +395,7 @@ async function handleDirectResponses(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
@@ -593,7 +594,7 @@ async function handleDirectMessages(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
@@ -747,7 +748,7 @@ async function handleCountTokens(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
@@ -886,7 +887,7 @@ async function handleDirectGenerate(req, res) {
     let lastErrorStatus = 500;
     let lastErrorText = '';
 
-    const maxAttempts = useRetry ? getActiveAccountCount() : 1;
+    const maxAttempts = useRetry ? Math.min(getActiveAccountCount(), MAX_RETRY_ACCOUNTS) : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let authHeader;
       try {
