@@ -219,7 +219,7 @@ async function handleChatCompletions(req, res) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
       }
-      logInfo(`Response status: ${response.status}`);
+      logDebug(`Response status: ${response.status}`);
 
       if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
         reportProxyFailure(proxyAgentInfo.proxy.url);
@@ -418,7 +418,7 @@ async function handleDirectResponses(req, res) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
       }
-      logInfo(`Response status: ${response.status}`);
+      logDebug(`Response status: ${response.status}`);
 
       if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
         reportProxyFailure(proxyAgentInfo.proxy.url);
@@ -468,7 +468,7 @@ async function handleDirectResponses(req, res) {
           res.write(chunk);
         }
         res.end();
-        logInfo('Stream forwarded successfully');
+        logDebug('Stream forwarded successfully');
       } catch (streamError) {
         logError('Stream error', streamError);
         res.end();
@@ -617,7 +617,7 @@ async function handleDirectMessages(req, res) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
       }
-      logInfo(`Response status: ${response.status}`);
+      logDebug(`Response status: ${response.status}`);
 
       if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
         reportProxyFailure(proxyAgentInfo.proxy.url);
@@ -665,7 +665,7 @@ async function handleDirectMessages(req, res) {
           res.write(chunk);
         }
         res.end();
-        logInfo('Stream forwarded successfully');
+        logDebug('Stream forwarded successfully');
       } catch (streamError) {
         logError('Stream error', streamError);
         res.end();
@@ -771,7 +771,7 @@ async function handleCountTokens(req, res) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
       }
-      logInfo(`Response status: ${response.status}`);
+      logDebug(`Response status: ${response.status}`);
 
       if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
         reportProxyFailure(proxyAgentInfo.proxy.url);
@@ -910,7 +910,7 @@ async function handleDirectGenerate(req, res) {
         if (proxyAgentInfo?.proxy?.url) reportProxyFailure(proxyAgentInfo.proxy.url);
         throw networkError;
       }
-      logInfo(`Response status: ${response.status}`);
+      logDebug(`Response status: ${response.status}`);
 
       if (PROXY_ERROR_STATUSES.has(response.status) && proxyAgentInfo?.proxy?.url) {
         reportProxyFailure(proxyAgentInfo.proxy.url);
@@ -958,7 +958,7 @@ async function handleDirectGenerate(req, res) {
           res.write(chunk);
         }
         res.end();
-        logInfo('Stream forwarded successfully');
+        logDebug('Stream forwarded successfully');
       } catch (streamError) {
         logError('Stream error', streamError);
         res.end();

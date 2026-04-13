@@ -38,8 +38,6 @@ export function logRequest(method, url, headers = null, body = null) {
       console.log('[BODY]', JSON.stringify(body, null, 2));
     }
     console.log('='.repeat(80) + '\n');
-  } else {
-    console.log(`[REQUEST] ${method} ${url}`);
   }
 }
 
@@ -72,7 +70,5 @@ export function logResponse(status, headers = null, body = null) {
       console.log('[BODY]', JSON.stringify(body, null, 2));
     }
     console.log('-'.repeat(80) + '\n');
-  } else {
-    console.log(`[RESPONSE] Status: ${status}`);
   }
 }
