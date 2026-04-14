@@ -524,10 +524,13 @@ async function handleDirectResponses(req, res) {
 
 function sanitizeAnthropicText(text) {
   if (typeof text !== 'string' || !text) return text;
-  return text.replace(
-    /Contents of [^\n]*[\\/]\.claude(?:[\\/][^\n]+?\.md) \((?:user's )?private global instructions for all projects\):?/g,
-    'User global instructions:'
-  );
+  return text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '')
+    .replace(
+      /Contents of [^\n]*[\\/]\.claude(?:[\\/][^\n]+?\.md) \((?:user's )?private global instructions for all projects\):?/g,
+      'User global instructions:'
+    )
+    .trim();
 }
 
 function sanitizeAnthropicMessages(messages) {
@@ -539,11 +542,13 @@ function sanitizeAnthropicMessages(messages) {
     if (Array.isArray(msg.content)) {
       return {
         ...msg,
-        content: msg.content.map(part => (
-          part && part.type === 'text' && typeof part.text === 'string'
-            ? { ...part, text: sanitizeAnthropicText(part.text) }
-            : part
-        ))
+        content: msg.content
+          .map(part => (
+            part && part.type === 'text' && typeof part.text === 'string'
+              ? { ...part, text: sanitizeAnthropicText(part.text) }
+              : part
+          ))
+          .filter(part => !(part && part.type === 'text' && typeof part.text === 'string' && part.text.trim() === ''))
       };
     }
     return msg;
