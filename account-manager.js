@@ -17,10 +17,7 @@ let dataVersion = 1;
 let backgroundTimers = [];
 
 // General cooldown removed: async health check handles real account issues (exhausted/banned/error).
-// Old blanket cooldown was causing cascading failures under high concurrency.
-// 429-only cooldown: rate-limited accounts get a short cooldown to avoid hammering upstream.
-const rateLimitCooldownMap = new Map(); // Map<accountId, { until: number, reason: string }>
-const RATE_LIMIT_COOLDOWN_MS = 3000; // 3 seconds cooldown for 429
+// 429 is treated as transient rate limiting and does not change account state.
 
 // Async health check: track which accounts are currently being checked to avoid duplicate checks
 const pendingHealthChecks = new Set();
@@ -187,11 +184,7 @@ export function getAllAccounts() {
       created_at: a.created_at,
       last_refresh: a.last_refresh,
       exp: a.exp,
-      cooldown: (() => {
-        const cd = rateLimitCooldownMap.get(a.id);
-        if (cd && cd.until > Date.now()) return cd;
-        return null;
-      })()
+      cooldown: null
     };
   });
 }
@@ -363,7 +356,6 @@ export async function initializeAccount(id) {
  */
 function cleanupAccountMemory(id) {
   accountLockMap.delete(id);
-  rateLimitCooldownMap.delete(id);
   lastUsedMap.delete(id);
   pendingHealthChecks.delete(id);
 }
@@ -757,15 +749,6 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
 
   logInfo(`[Failure] Account ${account.id} (${account.email || account.label || 'unknown'}): ${displayReason}`);
 
-  // 429: apply short cooldown to avoid hammering upstream while rate-limited
-  if (statusCode === 429) {
-    rateLimitCooldownMap.set(account.id, {
-      until: Date.now() + RATE_LIMIT_COOLDOWN_MS,
-      reason: displayReason
-    });
-    logInfo(`[Cooldown] Account ${account.id} rate-limited, cooling down ${RATE_LIMIT_COOLDOWN_MS / 1000}s`);
-  }
-
   // For status codes that may indicate account-level issues, async check real status (non-blocking)
   if ([401, 402, 403].includes(statusCode)) {
     asyncAccountHealthCheck(account, statusCode, trimmedReason);
@@ -917,7 +900,6 @@ export function getActiveAccountCount() {
  */
 export function getNextApiKey(excludeTokens = []) {
   const excludeSet = new Set(excludeTokens.map(t => t.replace(/^Bearer\s+/i, '')));
-
   const now = Date.now();
 
   // 1. Filter: active, not excluded
@@ -931,20 +913,8 @@ export function getNextApiKey(excludeTokens = []) {
     throw new Error('No active accounts available');
   }
 
-  // 1.5. Prefer accounts not in 429 cooldown, but fall back to all active if every one is cooling down
-  const notCoolingDown = active.filter(a => {
-    const cd = rateLimitCooldownMap.get(a.id);
-    if (!cd) return true;
-    if (cd.until <= now) {
-      rateLimitCooldownMap.delete(a.id); // expired, clean up
-      return true;
-    }
-    return false;
-  });
-  const pool = notCoolingDown.length > 0 ? notCoolingDown : active;
-
   // 2. Exclude exhausted
-  const available = pool.filter(a => {
+  const available = active.filter(a => {
     if (!a.cached_balance) return true;
     return a.cached_balance.usedRatio < 1.0;
   });
