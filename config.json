@@ -22,12 +22,7 @@
       "base_url": "https://api.factory.ai/api/llm/o/v1/chat/completions"
     }
   ],
-  "proxies": [
-    {
-      "name": "137.184.239.76:2260",
-      "url": "http://:5ba1b0d8ad2ca9c067cbdeb9440b89df@137.184.239.76:2260"
-    }
-  ],
+  "proxies": [],
   "models": [
     {
       "name": "Opus 4.5",
