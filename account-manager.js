@@ -345,10 +345,14 @@ export async function initializeAccount(id) {
     saveAccounts();
     logInfo(`Account ${account.id} initialized: status=${account.status}, usage=${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%`);
   } catch (error) {
-    account.status = 'error';
-    account.error_message = 'Balance check failed: ' + error.message;
-    saveAccounts();
-    logError(`Init failed for ${account.id}: balance check error`, error);
+    if (error.statusCode === 429) {
+      logInfo(`Init balance check rate-limited for ${account.id}, keeping status=${account.status}`);
+    } else {
+      account.status = 'error';
+      account.error_message = 'Balance check failed: ' + error.message;
+      saveAccounts();
+      logError(`Init failed for ${account.id}: balance check error`, error);
+    }
   }
 
   return account;
@@ -626,7 +630,9 @@ export async function checkAccountBalance(account) {
     const response = await fetch(BALANCE_URL, fetchOptions);
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Balance check failed: ${response.status} ${errorText}`);
+      const error = new Error(`Balance check failed: ${response.status} ${errorText}`);
+      error.statusCode = response.status;
+      throw error;
     }
 
     const data = await response.json();
@@ -811,6 +817,10 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
       }
     } catch (error) {
       // Balance check also failed → possibly invalid token or banned account
+      if (error.statusCode === 429) {
+        logInfo(`[HealthCheck] Balance check for account ${account.id} was rate-limited (429), keeping current status`);
+        return;
+      }
       logError(`[HealthCheck] Balance check failed for account ${account.id}`, error);
 
       // 401 special handling: try to refresh token (refreshAccountToken has its own lock)
