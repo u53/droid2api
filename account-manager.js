@@ -22,9 +22,8 @@ let backgroundTimers = [];
 // Async health check: track which accounts are currently being checked to avoid duplicate checks
 const pendingHealthChecks = new Set();
 
-// Round-robin: track last-used timestamp per account to spread concurrent requests
-// Map<accountId, lastUsedTimestamp>
-const lastUsedMap = new Map();
+// Sequential scheduler cursor: points to the next candidate in the usable account list
+let nextAccountCursor = 0;
 
 // ────────────────────────────────────────
 // Concurrency Control (prevent race conditions)
@@ -356,8 +355,10 @@ export async function initializeAccount(id) {
  */
 function cleanupAccountMemory(id) {
   accountLockMap.delete(id);
-  lastUsedMap.delete(id);
   pendingHealthChecks.delete(id);
+  if (nextAccountCursor >= accounts.length) {
+    nextAccountCursor = 0;
+  }
 }
 
 /**
@@ -879,21 +880,14 @@ export function getActiveAccountCount() {
 }
 
 /**
- * Get next API key using smart scheduling
+ * Get next API key using sequential round-robin scheduling.
  * @param {string[]} excludeTokens - Bearer tokens to exclude (already tried in this request)
  *
- * Sorting priority:
- *   1. usage ratio descending (highest first — exhaust near-full accounts quickly)
- *   2. least-recently-used first (spread concurrent requests within similar usage band)
- * Concurrency safety:
- *   - Each request carries its own excludeTokens list, so retries within one
- *     request never pick the same account twice.
- *   - lastUsedMap ensures concurrent requests arriving at the same time are
- *     distributed across different accounts (round-robin effect).
- *   - Failure reporting triggers async health check which sets account status
- *     (exhausted/error) — visible to all subsequent getNextApiKey calls (single-threaded Node.js).
- *   - Exhausted accounts are auto-removed by asyncAccountHealthCheck and
- *     backgroundCheckBalances, keeping the account pool clean.
+ * Strategy:
+ *   - Preserve accounts array order as scheduling order.
+ *   - Start from nextAccountCursor and scan circularly.
+ *   - Pick the first account that is active, not exhausted, not excluded, and token-usable.
+ *   - Advance cursor after each successful pick.
  *
  * Note: This function is synchronous (pure memory operations). No network IO.
  * Token refresh is handled entirely by background tasks.
@@ -902,51 +896,41 @@ export function getNextApiKey(excludeTokens = []) {
   const excludeSet = new Set(excludeTokens.map(t => t.replace(/^Bearer\s+/i, '')));
   const now = Date.now();
 
-  // 1. Filter: active, not excluded
-  const active = accounts.filter(a => {
-    if (a.status !== 'active') return false;
-    if (excludeSet.has(a.access_token)) return false;
-    return true;
-  });
-
-  if (active.length === 0) {
+  const activeCount = accounts.filter(a => a.status === 'active').length;
+  if (activeCount === 0) {
     throw new Error('No active accounts available');
   }
 
-  // 2. Exclude exhausted
-  const available = active.filter(a => {
-    if (!a.cached_balance) return true;
-    return a.cached_balance.usedRatio < 1.0;
-  });
-  if (available.length === 0) {
-    throw new Error('All active accounts have exhausted their quota (100%)');
+  const usableCount = accounts.filter(a => {
+    if (a.status !== 'active') return false;
+    if (!(a.access_token || a.refresh_token)) return false;
+    if (excludeSet.has(a.access_token)) return false;
+    if (a.cached_balance && a.cached_balance.usedRatio >= 1.0) return false;
+    return true;
+  }).length;
+
+  if (usableCount === 0) {
+    throw new Error('No usable accounts (all exhausted, excluded, or missing token)');
   }
 
-  // 3. Must have token or refresh token
-  const usable = available.filter(a => a.access_token || a.refresh_token);
-  if (usable.length === 0) {
-    throw new Error('No usable accounts (missing token)');
+  const total = accounts.length;
+  if (nextAccountCursor >= total) {
+    nextAccountCursor = 0;
   }
 
-  // 4. Sort: primary by usage ratio desc (exhaust near-full accounts first),
-  //    secondary by least-recently-used (spread concurrent requests)
-  usable.sort((a, b) => {
-    const ratioA = a.cached_balance?.usedRatio ?? 0;
-    const ratioB = b.cached_balance?.usedRatio ?? 0;
-    // If ratios are close (within 5%), prefer least recently used
-    if (Math.abs(ratioA - ratioB) < 0.05) {
-      const luA = lastUsedMap.get(a.id) || 0;
-      const luB = lastUsedMap.get(b.id) || 0;
-      return luA - luB; // smaller timestamp = used longer ago = preferred
-    }
-    return ratioB - ratioA; // higher usage first — exhaust and clean up
-  });
+  for (let i = 0; i < total; i += 1) {
+    const index = (nextAccountCursor + i) % total;
+    const account = accounts[index];
+    if (!account) continue;
 
-  // 5. Pick first account with a valid token (pure memory, no network IO)
-  for (const account of usable) {
+    if (account.status !== 'active') continue;
+    if (!(account.access_token || account.refresh_token)) continue;
+    if (excludeSet.has(account.access_token)) continue;
+    if (account.cached_balance && account.cached_balance.usedRatio >= 1.0) continue;
+
     if (account.type === 'apikey') {
       if (!account.access_token) continue;
-      lastUsedMap.set(account.id, Date.now());
+      nextAccountCursor = (index + 1) % total;
       logDebug(`Scheduled apikey account: ${account.id} (${account.label || 'no label'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
       return `Bearer ${account.access_token}`;
     }
@@ -960,7 +944,7 @@ export function getNextApiKey(excludeTokens = []) {
       continue;
     }
 
-    lastUsedMap.set(account.id, Date.now());
+    nextAccountCursor = (index + 1) % total;
     logDebug(`Scheduled account: ${account.id} (${account.email || 'no email'}, usage: ${((account.cached_balance?.usedRatio ?? 0) * 100).toFixed(1)}%)`);
     return `Bearer ${account.access_token}`;
   }
