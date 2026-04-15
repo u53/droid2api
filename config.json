@@ -30,6 +30,10 @@
     {
       "name": "brightdata-dc-2",
       "url": "http://brd-customer-hl_39971635-zone-datacenter_proxy1:q8pgbh64inc1@brd.superproxy.io:33335"
+    },
+    {
+      "name": "brightdata-dc-3",
+      "url": "http://brd-customer-hl_8b4d085c-zone-datacenter_proxy1:27k7ss4cgkim@brd.superproxy.io:33335"
     }
   ],
   "models": [

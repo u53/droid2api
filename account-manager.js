@@ -1039,19 +1039,6 @@ export function startBackgroundTasks() {
 
   backgroundTimers.push(refreshTimer, balanceTimer);
   logInfo('Background tasks started (token refresh: 10min, balance check: 15min)');
-
-  // Run initial check after a short delay (10 seconds)
-  setTimeout(async () => {
-    if (accounts.length > 0) {
-      logInfo('Running initial background tasks...');
-      try {
-        await backgroundRefreshTokens();
-        await backgroundCheckBalances();
-      } catch (error) {
-        logError('Initial background tasks failed', error);
-      }
-    }
-  }, 10 * 1000);
 }
 
 /**
