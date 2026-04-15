@@ -22,7 +22,12 @@
       "base_url": "https://api.factory.ai/api/llm/o/v1/chat/completions"
     }
   ],
-  "proxies": [],
+  "proxies": [
+    {
+      "name": "brightdata-dc-1",
+      "url": "http://brd-customer-hl_d1b83d78-zone-datacenter_proxy1:h2lf8wa0yrts@brd.superproxy.io:33335"
+    }
+  ],
   "models": [
     {
       "name": "Opus 4.5",
