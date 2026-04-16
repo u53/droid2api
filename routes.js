@@ -258,8 +258,10 @@ async function handleChatCompletions(req, res) {
       }
 
       // Non-retryable error or last attempt
-      const errorText = lastErrorText || await response.text();
-      if (useRetry && response.status === 403) {
+      const errorText = await response.text();
+      lastErrorText = errorText;
+      lastErrorStatus = response.status;
+      if (useRetry && (response.status === 402 || response.status === 403)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
@@ -467,8 +469,10 @@ async function handleDirectResponses(req, res) {
         continue;
       }
 
-      const errorText = lastErrorText || await response.text();
-      if (useRetry && response.status === 403) {
+      const errorText = await response.text();
+      lastErrorText = errorText;
+      lastErrorStatus = response.status;
+      if (useRetry && (response.status === 402 || response.status === 403)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
@@ -678,8 +682,10 @@ async function handleDirectMessages(req, res) {
         continue;
       }
 
-      const errorText = lastErrorText || await response.text();
-      if (useRetry && response.status === 403) {
+      const errorText = await response.text();
+      lastErrorText = errorText;
+      lastErrorStatus = response.status;
+      if (useRetry && (response.status === 402 || response.status === 403)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {
@@ -839,7 +845,12 @@ async function handleCountTokens(req, res) {
         continue;
       }
 
-      const errorText = lastErrorText || await response.text();
+      const errorText = await response.text();
+      lastErrorText = errorText;
+      lastErrorStatus = response.status;
+      if (useRetry && response.status === 402) {
+        reportApiKeyFailure(authHeader, response.status, errorText);
+      }
       if (response.status === 403) {
         log403('POST', countTokensUrl, headers, modifiedRequest, errorText);
       }
@@ -980,8 +991,10 @@ async function handleDirectGenerate(req, res) {
         continue;
       }
 
-      const errorText = lastErrorText || await response.text();
-      if (useRetry && response.status === 403) {
+      const errorText = await response.text();
+      lastErrorText = errorText;
+      lastErrorStatus = response.status;
+      if (useRetry && (response.status === 402 || response.status === 403)) {
         reportApiKeyFailure(authHeader, response.status, errorText);
       }
       if (response.status === 403) {

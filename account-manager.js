@@ -10,6 +10,7 @@ const ACCOUNTS_FILE = path.join(process.cwd(), 'accounts.json');
 const REFRESH_URL = 'https://api.workos.com/user_management/authenticate';
 const BALANCE_URL = 'https://app.factory.ai/api/organization/members/chat-usage?interval=M';
 const CLIENT_ID = 'client_01HNM792M5G5G1A2THWPXKFMXB';
+const FACTORY_BILLING_BLOCKED_PREFIX = 'Factory billing blocked (402 Payment Required)';
 
 // In-memory state
 let accounts = [];
@@ -150,6 +151,28 @@ function saveAccountsSync() {
   }
   savePending = false;
   saveAccountsImmediate();
+}
+
+function isFactoryBillingBlocked(account) {
+  return typeof account?.error_message === 'string'
+    && account.error_message.startsWith(FACTORY_BILLING_BLOCKED_PREFIX);
+}
+
+async function markAccountBillingBlocked(account, detail) {
+  if (!account?.id) return;
+
+  const releaseAccountLock = await acquireAccountLock(account.id);
+  try {
+    if (!accounts.includes(account)) return;
+    if (account.status === 'disabled') return;
+
+    const suffix = detail ? `: ${detail}` : '';
+    account.status = 'exhausted';
+    account.error_message = `${FACTORY_BILLING_BLOCKED_PREFIX}${suffix}`;
+    saveAccountsSync();
+  } finally {
+    releaseAccountLock();
+  }
 }
 
 // ────────────────────────────────────────
@@ -647,11 +670,13 @@ export async function checkAccountBalance(account) {
     if (usedRatio >= 1.0) {
       if (account.status !== 'disabled') {
         account.status = 'exhausted';
-        account.error_message = `Quota exhausted (${(usedRatio * 100).toFixed(1)}%)`;
+        if (!isFactoryBillingBlocked(account)) {
+          account.error_message = `Quota exhausted (${(usedRatio * 100).toFixed(1)}%)`;
+        }
         logInfo(`Account ${account.id} marked as exhausted: ${(usedRatio * 100).toFixed(1)}% used`);
       }
-    } else if (account.status === 'exhausted') {
-      // Recovered from exhausted
+    } else if (account.status === 'exhausted' && !isFactoryBillingBlocked(account)) {
+      // Recovered from quota-based exhaustion
       account.status = 'active';
       account.error_message = null;
       logInfo(`Account ${account.id} recovered from exhausted: ${(usedRatio * 100).toFixed(1)}% used`);
@@ -750,6 +775,12 @@ export function reportAccountFailure(bearerToken, statusCode, reason) {
 
   logInfo(`[Failure] Account ${account.id} (${account.email || account.label || 'unknown'}): ${displayReason}`);
 
+  if (statusCode === 402) {
+    void markAccountBillingBlocked(account, trimmedReason).catch(error => {
+      logError(`[Failure] Failed to mark account ${account.id} as billing-blocked`, error);
+    });
+  }
+
   // For status codes that may indicate account-level issues, async check real status (non-blocking)
   if ([401, 402, 403].includes(statusCode)) {
     asyncAccountHealthCheck(account, statusCode, trimmedReason);
@@ -793,6 +824,18 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
 
       // Balance check succeeded → token valid, account not banned
       // checkAccountBalance already handles setting exhausted status internally
+      if (statusCode === 402) {
+        if (isFactoryBillingBlocked(account)) {
+          logInfo(`[HealthCheck] Account ${account.id} remains exhausted due to upstream 402 billing rejection (${(balance.usedRatio * 100).toFixed(1)}% used)`);
+        } else if (balance.usedRatio >= 1.0) {
+          logInfo(`[HealthCheck] Account ${account.id} confirmed exhausted (${(balance.usedRatio * 100).toFixed(1)}% used)`);
+        } else {
+          await markAccountBillingBlocked(account, errorDetail);
+          logInfo(`[HealthCheck] Account ${account.id} marked as exhausted due to upstream 402 despite ${(balance.usedRatio * 100).toFixed(1)}% usage`);
+        }
+        return;
+      }
+
       if (balance.usedRatio >= 1.0) {
         logInfo(`[HealthCheck] Account ${account.id} confirmed exhausted (${(balance.usedRatio * 100).toFixed(1)}% used)`);
       } else {
@@ -830,7 +873,13 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
         return;
       }
 
-      // 402/403: lock and update status to prevent race with other operations
+      // 402/403: update status to prevent race with other operations
+      if (statusCode === 402) {
+        await markAccountBillingBlocked(account, errorDetail || `balance check also failed: ${error.message}`);
+        logInfo(`[HealthCheck] Account ${account.id} remains exhausted due to upstream 402 (balance check failed)`);
+        return;
+      }
+
       const releaseAccountLock = await acquireAccountLock(account.id);
       try {
         // Check if account was removed or manually handled during health check
@@ -844,13 +893,7 @@ function asyncAccountHealthCheck(account, statusCode, errorDetail) {
           return;
         }
 
-        if (statusCode === 402) {
-          // 402 + balance check also failed → quota issue, mark as exhausted
-          account.status = 'exhausted';
-          account.error_message = `Insufficient quota (402), balance check also failed: ${error.message}`;
-          saveAccountsSync();
-          logInfo(`[HealthCheck] Account ${account.id} marked as exhausted (402 + balance check failed)`);
-        } else if (statusCode === 403) {
+        if (statusCode === 403) {
           // 403 + balance check also failed → likely account ban
           account.status = 'error';
           account.error_message = `Suspected ban (403), balance check also failed: ${error.message}`;
